@@ -185,7 +185,9 @@ def resumen():
 @app.route("/dashboard")
 def dashboard():
     return open("dashboard.html").read()
-
+@app.route("/constitucion")
+def constitucion():
+    return open("constitucion_dashboard.html").read()
 # Init DB
 try:
     init_db()
