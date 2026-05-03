@@ -181,6 +181,11 @@ def resumen():
     except Exception as e:
         return jsonify({"error": str(e)})
 
+
+@app.route("/dashboard")
+def dashboard():
+    return open("dashboard.html").read()
+
 # Init DB
 try:
     init_db()
@@ -190,3 +195,4 @@ except Exception as e:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+# Esta línea ya está al final del archivo — no duplicar
