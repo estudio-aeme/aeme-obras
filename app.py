@@ -4,22 +4,31 @@ import os
 import json
 import requests
 from datetime import datetime
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import pg8000.native
 
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+def parse_db_url(url):
+    """Parsea la URL de la base de datos"""
+    # postgresql://user:password@host/dbname
+    url = url.replace("postgresql://", "")
+    user_pass, rest = url.split("@")
+    user, password = user_pass.split(":")
+    host_db = rest.split("/")
+    host = host_db[0]
+    db = host_db[1]
+    return user, password, host, db
+
 def get_db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    user, password, host, db = parse_db_url(DATABASE_URL)
+    return pg8000.native.Connection(user, password=password, host=host, database=db, ssl_context=True)
 
 def init_db():
-    """Crea las tablas si no existen"""
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
+    conn.run("""
         CREATE TABLE IF NOT EXISTS movimientos (
             id SERIAL PRIMARY KEY,
             fecha TIMESTAMP DEFAULT NOW(),
@@ -29,7 +38,9 @@ def init_db():
             descripcion TEXT,
             proveedor VARCHAR(100),
             remitente VARCHAR(50)
-        );
+        )
+    """)
+    conn.run("""
         CREATE TABLE IF NOT EXISTS acopios (
             id SERIAL PRIMARY KEY,
             fecha TIMESTAMP DEFAULT NOW(),
@@ -39,10 +50,8 @@ def init_db():
             obra VARCHAR(100),
             tipo VARCHAR(20) DEFAULT 'ingreso',
             remitente VARCHAR(50)
-        );
+        )
     """)
-    conn.commit()
-    cur.close()
     conn.close()
 
 def procesar_con_ia(mensaje, remitente):
@@ -61,7 +70,6 @@ Podés hacer estas acciones:
 2. REGISTRAR un ingreso → ACCION:{"tipo":"ingreso","obra":"nombre","monto":5000,"descripcion":"anticipo cliente"}
 3. REGISTRAR acopio (material que entra) → ACCION:{"tipo":"acopio_ingreso","material":"cemento","cantidad":50,"unidad":"bolsas","obra":"nombre"}
 4. REGISTRAR desacopio (material que sale) → ACCION:{"tipo":"acopio_egreso","material":"cemento","cantidad":10,"unidad":"bolsas","obra":"nombre"}
-5. CONSULTAR saldo de una obra → respondé con los datos de la base
 
 Cuando registres algo incluí el JSON exactamente así con el prefijo ACCION: al inicio.
 Para consultas respondé en texto amigable.
@@ -90,7 +98,7 @@ Hablá en español rioplatense, claro y conciso. Máximo 3 oraciones."""
                     fin = respuesta.index("}", inicio) + 1
                     accion = json.loads(respuesta[inicio:fin])
                     guardar_en_db(accion, remitente)
-                    texto = respuesta[fin:].strip() or "¡Registrado!"
+                    texto = respuesta[fin:].strip() or "¡Registrado correctamente!"
                     return f"✅ {texto}"
                 except Exception as e:
                     pass
@@ -104,36 +112,28 @@ Hablá en español rioplatense, claro y conciso. Máximo 3 oraciones."""
 
 def guardar_en_db(accion, remitente):
     conn = get_db()
-    cur = conn.cursor()
     tipo = accion.get("tipo", "")
 
     if tipo in ["egreso", "ingreso"]:
-        cur.execute("""
-            INSERT INTO movimientos (tipo, obra, monto, descripcion, proveedor, remitente)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (
-            tipo,
-            accion.get("obra", "General"),
-            accion.get("monto", 0),
-            accion.get("descripcion", ""),
-            accion.get("proveedor", ""),
-            remitente
-        ))
+        conn.run(
+            "INSERT INTO movimientos (tipo, obra, monto, descripcion, proveedor, remitente) VALUES (:tipo, :obra, :monto, :desc, :prov, :rem)",
+            tipo=tipo,
+            obra=accion.get("obra", "General"),
+            monto=float(accion.get("monto", 0)),
+            desc=accion.get("descripcion", ""),
+            prov=accion.get("proveedor", ""),
+            rem=remitente
+        )
     elif tipo in ["acopio_ingreso", "acopio_egreso"]:
-        cur.execute("""
-            INSERT INTO acopios (material, cantidad, unidad, obra, tipo, remitente)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (
-            accion.get("material", ""),
-            accion.get("cantidad", 0),
-            accion.get("unidad", ""),
-            accion.get("obra", "General"),
-            tipo,
-            remitente
-        ))
-
-    conn.commit()
-    cur.close()
+        conn.run(
+            "INSERT INTO acopios (material, cantidad, unidad, obra, tipo, remitente) VALUES (:mat, :cant, :uni, :obra, :tipo, :rem)",
+            mat=accion.get("material", ""),
+            cant=float(accion.get("cantidad", 0)),
+            uni=accion.get("unidad", ""),
+            obra=accion.get("obra", "General"),
+            tipo=tipo,
+            rem=remitente
+        )
     conn.close()
 
 @app.route("/webhook", methods=["POST"])
@@ -153,14 +153,10 @@ def home():
 def ver_datos():
     try:
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM movimientos ORDER BY fecha DESC LIMIT 100")
-        movimientos = [dict(r) for r in cur.fetchall()]
-        cur.execute("SELECT * FROM acopios ORDER BY fecha DESC LIMIT 100")
-        acopios = [dict(r) for r in cur.fetchall()]
-        cur.close()
+        movs = conn.run("SELECT * FROM movimientos ORDER BY fecha DESC LIMIT 100")
+        acops = conn.run("SELECT * FROM acopios ORDER BY fecha DESC LIMIT 100")
         conn.close()
-        return jsonify({"movimientos": movimientos, "acopios": acopios})
+        return jsonify({"movimientos": [list(r) for r in movs], "acopios": [list(r) for r in acops]})
     except Exception as e:
         return jsonify({"error": str(e)})
 
@@ -168,33 +164,28 @@ def ver_datos():
 def resumen():
     try:
         conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
+        obras = conn.run("""
             SELECT obra,
-                SUM(CASE WHEN tipo='ingreso' THEN monto ELSE 0 END) as total_ingresos,
-                SUM(CASE WHEN tipo='egreso' THEN monto ELSE 0 END) as total_egresos,
+                SUM(CASE WHEN tipo='ingreso' THEN monto ELSE 0 END) as ingresos,
+                SUM(CASE WHEN tipo='egreso' THEN monto ELSE 0 END) as egresos,
                 SUM(CASE WHEN tipo='ingreso' THEN monto ELSE -monto END) as saldo
             FROM movimientos GROUP BY obra ORDER BY obra
         """)
-        obras = [dict(r) for r in cur.fetchall()]
-        cur.execute("""
+        stocks = conn.run("""
             SELECT obra, material, unidad,
                 SUM(CASE WHEN tipo='acopio_ingreso' THEN cantidad ELSE -cantidad END) as stock
             FROM acopios GROUP BY obra, material, unidad ORDER BY obra, material
         """)
-        stocks = [dict(r) for r in cur.fetchall()]
-        cur.close()
         conn.close()
-        return jsonify({"resumen_por_obra": obras, "stock_materiales": stocks})
+        return jsonify({"obras": [list(r) for r in obras], "stocks": [list(r) for r in stocks]})
     except Exception as e:
         return jsonify({"error": str(e)})
 
-# Inicializar DB al arrancar
-with app.app_context():
-    try:
-        init_db()
-    except:
-        pass
+# Init DB
+try:
+    init_db()
+except Exception as e:
+    print(f"DB init error: {e}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
