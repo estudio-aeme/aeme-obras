@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Obra Constitución — Aeme Obras</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0c0c0e;
+  --surface: #16161a;
+  --surface2: #1e1e24;
+  --border: #2a2a32;
+  --accent: #f5a623;
+  --accent2: #e05c2a;
+  --blue: #4a9eff;
+  --green: #2ecc71;
+  --red: #e74c3c;
+  --purple: #9b59b6;
+  --text: #ede8e0;
+  --muted: #777;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 1.2rem 2rem;
+  display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+}
+.logo { font-family: 'Bebas Neue', sans-serif; font-size: 1.8rem; letter-spacing: 3px; }
+.logo span { color: var(--accent); }
+.obra-tag {
+  background: var(--accent2);
+  color: #fff;
+  font-size: .72rem;
+  font-family: 'DM Mono', monospace;
+  padding: .3rem .8rem;
+  border-radius: 4px;
+  letter-spacing: 1px;
+}
+.fecha-tag { font-size: .75rem; color: var(--muted); font-family: 'DM Mono', monospace; }
+
+.container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+
+/* BLOQUES SELECTOR */
+.bloques { display: flex; gap: .5rem; margin-bottom: 2rem; }
+.bloque-btn {
+  padding: .6rem 1.5rem; border-radius: 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted); cursor: pointer;
+  font-family: 'DM Sans', sans-serif; font-size: .85rem; transition: all .2s;
+}
+.bloque-btn.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+.bloque-btn:hover:not(.active) { border-color: var(--accent); color: var(--text); }
+
+/* KPI GRID */
+.kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin-bottom: 2rem; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem 1.5rem; }
+.kpi-label { font-size: .65rem; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); font-family: 'DM Mono', monospace; margin-bottom: .4rem; }
+.kpi-value { font-family: 'Bebas Neue', sans-serif; font-size: 1.8rem; letter-spacing: 1px; line-height: 1; }
+.kpi-sub { font-size: .72rem; color: var(--muted); margin-top: .3rem; }
+.green { color: var(--green); }
+.red { color: var(--red); }
+.accent { color: var(--accent); }
+.blue { color: var(--blue); }
+
+/* SECTION */
+.section-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.1rem; letter-spacing: 2px; color: var(--muted);
+  margin-bottom: 1rem; display: flex; align-items: center; gap: .5rem;
+}
+.section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+/* CONTRATOS TABLE */
+.table-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 2rem; }
+table { width: 100%; border-collapse: collapse; }
+thead tr { background: var(--surface2); }
+th { padding: .8rem 1.2rem; text-align: left; font-size: .65rem; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); font-family: 'DM Mono', monospace; white-space: nowrap; }
+td { padding: .85rem 1.2rem; border-top: 1px solid var(--border); font-size: .85rem; }
+tr:hover td { background: var(--surface2); }
+.money { font-family: 'DM Mono', monospace; font-size: .8rem; }
+.money.pos { color: var(--green); }
+.money.neg { color: var(--red); }
+.money.neutral { color: var(--accent); }
+.proveedor-tag { font-size: .72rem; color: var(--muted); display: block; }
+
+/* BARRA PROGRESO */
+.progress-bar { background: var(--surface2); border-radius: 4px; height: 6px; margin-top: .4rem; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 4px; transition: width .3s; }
+
+/* DOS COLUMNAS */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; }
+
+/* CARD */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; }
+.card-title { font-size: .8rem; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); font-family: 'DM Mono', monospace; margin-bottom: 1rem; }
+
+/* RESULTADO CARD */
+.resultado-grande {
+  background: var(--surface); border: 1px solid var(--accent);
+  border-radius: 16px; padding: 2rem;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem; margin-bottom: 2rem;
+  text-align: center;
+}
+.res-label { font-size: .65rem; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); font-family: 'DM Mono', monospace; margin-bottom: .5rem; }
+.res-value { font-family: 'Bebas Neue', sans-serif; font-size: 2.5rem; }
+.res-usd { font-size: .8rem; color: var(--muted); font-family: 'DM Mono', monospace; margin-top: .3rem; }
+.res-divider { width: 1px; background: var(--border); }
+
+/* CERAMICOS */
+.ceramico-item { display: flex; justify-content: space-between; align-items: center; padding: .7rem 0; border-bottom: 1px solid var(--border); }
+.ceramico-item:last-child { border-bottom: none; }
+.ceramico-nombre { font-size: .85rem; }
+.ceramico-medida { font-size: .7rem; color: var(--muted); font-family: 'DM Mono', monospace; }
+.ceramico-nums { text-align: right; }
+.ceramico-total { font-family: 'DM Mono', monospace; font-size: .82rem; color: var(--accent); }
+.ceramico-entregado { font-size: .7rem; color: var(--muted); font-family: 'DM Mono', monospace; }
+.ceramico-bar { width: 120px; }
+.ceramico-pct { font-size: .7rem; color: var(--muted); text-align: right; margin-top: .2rem; }
+
+/* RESUMEN FINANCIERO */
+.fin-row { display: flex; justify-content: space-between; padding: .6rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }
+.fin-row:last-child { border-bottom: none; }
+.fin-total { font-weight: 600; font-size: 1rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">AEME <span>OBRAS</span></div>
+  <div style="display:flex;align-items:center;gap:1rem">
+    <span class="obra-tag">CONSTITUCIÓN</span>
+    <span class="fecha-tag">DATA: 19/03/2026</span>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- SELECTOR DE BLOQUE -->
+  <div class="bloques">
+    <button class="bloque-btn active" onclick="setBloque('ambos', this)">🏗️ Ambos Bloques</button>
+    <button class="bloque-btn" onclick="setBloque('sanjose', this)">🅢 San José</button>
+    <button class="bloque-btn" onclick="setBloque('santiago', this)">🅢 Santiago del Estero</button>
+  </div>
+
+  <!-- RESULTADO GLOBAL -->
+  <div class="resultado-grande" id="resultadoGrande">
+    <div>
+      <div class="res-label">Total Cobrado (Constructora)</div>
+      <div class="res-value green" id="rCobrado">$1.444,7M</div>
+      <div class="res-usd">USD 174.963</div>
+    </div>
+    <div class="res-divider"></div>
+    <div>
+      <div class="res-label">Total Erogado</div>
+      <div class="res-value red" id="rErogado">$713,0M</div>
+      <div class="res-usd">aprox.</div>
+    </div>
+    <div class="res-divider"></div>
+    <div>
+      <div class="res-label">Utilidad Bruta</div>
+      <div class="res-value accent" id="rUtilidad">$682,5M</div>
+      <div class="res-usd">USD 64.206 neto</div>
+    </div>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="kpi-label">San José — Resultado</div>
+      <div class="kpi-value green">$419,7M</div>
+      <div class="kpi-sub">USD 39.389 | Jun'24–Dic'25</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Santiago — Resultado</div>
+      <div class="kpi-value green">$262,7M</div>
+      <div class="kpi-sub">USD 24.817 | Ago'24–Jun'25</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Contratos Activos</div>
+      <div class="kpi-value accent">17</div>
+      <div class="kpi-sub">Edificio San José</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Honorarios Est.</div>
+      <div class="kpi-value blue">$35,4M</div>
+      <div class="kpi-sub">San José + Santiago</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Cerámicos Entregados</div>
+      <div class="kpi-value accent">6.868m²</div>
+      <div class="kpi-sub">de 10.882m² total</div>
+    </div>
+  </div>
+
+  <!-- CONTRATOS SAN JOSE -->
+  <div id="secSanJose">
+    <div class="section-title">📋 Contratos — Edificio San José</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Descripción</th>
+            <th>Proveedor</th>
+            <th>Inicio</th>
+            <th>Contrato</th>
+            <th>Erogado</th>
+            <th>Cobrado</th>
+            <th>Resultado</th>
+            <th>Avance</th>
+          </tr>
+        </thead>
+        <tbody id="tablaContratos"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- CONTRATOS SANTIAGO -->
+  <div id="secSantiago">
+    <div class="section-title">🏛️ Contratos — Edificio Santiago del Estero</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Descripción</th>
+            <th>Proveedor</th>
+            <th>Inicio</th>
+            <th>Presupuesto</th>
+            <th>Erogado</th>
+            <th>Cargas</th>
+            <th>Cobrado</th>
+            <th>Resultado</th>
+          </tr>
+        </thead>
+        <tbody id="tablaContratosSde"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- DOS COLUMNAS -->
+  <div class="two-col">
+    <!-- CERAMICOS -->
+    <div class="card">
+      <div class="card-title">📦 Acopio Cerámicos — Stock y Entregas</div>
+      <div id="ceramicosList"></div>
+      <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:.8rem">
+        <span style="color:var(--muted)">Total entregado</span>
+        <span style="font-family:'DM Mono',monospace;color:var(--green)">6.868 m² de 10.882 m²</span>
+      </div>
+    </div>
+
+    <!-- RESUMEN FINANCIERO -->
+    <div class="card">
+      <div class="card-title">💰 Resumen Financiero — Constructora</div>
+      <div class="fin-row">
+        <span>Facturado San José</span>
+        <span class="money pos">$949.752.799</span>
+      </div>
+      <div class="fin-row">
+        <span>Erogado San José (contratistas)</span>
+        <span class="money neg">-$530.030.402</span>
+      </div>
+      <div class="fin-row fin-total">
+        <span>Resultado San José</span>
+        <span class="money pos">$419.722.397</span>
+      </div>
+      <div style="height:1rem"></div>
+      <div class="fin-row">
+        <span>Facturado Santiago (Hormigón)</span>
+        <span class="money pos">$495.000.000</span>
+      </div>
+      <div class="fin-row">
+        <span>Erogado Santiago</span>
+        <span class="money neg">-$232.251.383</span>
+      </div>
+      <div class="fin-row fin-total">
+        <span>Resultado Santiago</span>
+        <span class="money pos">$262.748.617</span>
+      </div>
+      <div style="height:1rem;border-top:2px solid var(--accent);margin-top:.5rem;padding-top:.5rem">
+      </div>
+      <div class="fin-row fin-total" style="margin-top:.5rem">
+        <span style="color:var(--accent)">UTILIDAD TOTAL BRUTA</span>
+        <span class="money" style="color:var(--accent);font-size:1rem">$682.471.014</span>
+      </div>
+      <div class="fin-row">
+        <span style="color:var(--muted)">- Honorarios (-15%)</span>
+        <span class="money neg">-$89.888.295</span>
+      </div>
+      <div class="fin-row">
+        <span style="color:var(--muted)">- Gastos</span>
+        <span class="money neg">-$35.400.000</span>
+      </div>
+      <div class="fin-row fin-total" style="border-top:1px solid var(--accent);padding-top:.5rem;margin-top:.2rem">
+        <span>Resultado Neto Estimado</span>
+        <span class="money pos" style="font-size:1.1rem">$557.182.719</span>
+      </div>
+      <div style="text-align:right;font-size:.7rem;color:var(--muted);font-family:'DM Mono',monospace;margin-top:.3rem">≈ USD 64.206 (TC $1.400)</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const contratosSJ = [
+  {n:1, desc:'ELECTRICIDAD', prov:'Pablo Fidi', inicio:'Sep-24', contrato:45900000, erogado:45900000, cobrado:94061982, resultado:48161982},
+  {n:2, desc:'CIELORRASOS', prov:'Hugo Esquivel', inicio:'Oct-24', contrato:13719768, erogado:13719768, cobrado:33450000, resultado:19730232},
+  {n:3, desc:'DURLOCK ADICIONALES', prov:'Ever/Julio', inicio:'May-25', contrato:3945000, erogado:3945000, cobrado:16600000, resultado:12655000},
+  {n:4, desc:'SANITARIAS', prov:'Ricardo Sequeira', inicio:'Dic-24', contrato:77500000, erogado:77500000, cobrado:147000000, resultado:69500000},
+  {n:5, desc:'IMPERMEABILIZACION', prov:'Edgar', inicio:'Ene-24', contrato:8905000, erogado:8905000, cobrado:18873010, resultado:9968010},
+  {n:6, desc:'PINTURA', prov:'Luis Contreras', inicio:'Mar-25', contrato:32960000, erogado:32960000, cobrado:56413643, resultado:23453643},
+  {n:7, desc:'PINTURA HERRERÍA + EXTERIOR', prov:'Julio Cabrera', inicio:'Nov-25', contrato:7100000, erogado:7100000, cobrado:21560000, resultado:14460000},
+  {n:8, desc:'COLOCACIÓN REVESTIMIENTOS', prov:'Miguel Brandell', inicio:'Feb-25', contrato:23826419, erogado:23826419, cobrado:35722618, resultado:11896199},
+  {n:9, desc:'PRE INSTALACIÓN AA', prov:'Jean Pierre', inicio:'Mar-25', contrato:22180000, erogado:22180000, cobrado:44263700, resultado:22083700},
+  {n:10, desc:'HERRERÍA GENERAL', prov:'Leo Gallardo', inicio:'Mar-25', contrato:26566640, erogado:26566640, cobrado:47400000, resultado:20833360},
+  {n:11, desc:'HERRERÍA AZOTEA', prov:'Leo Gallardo', inicio:'Abr-25', contrato:1948500, erogado:1948500, cobrado:4970000, resultado:3021500},
+  {n:12, desc:'PORTONES VEHICULAR Y PEATONAL', prov:'Sergio', inicio:'May-25', contrato:11150000, erogado:11150000, cobrado:17250000, resultado:6100000},
+  {n:13, desc:'ILUMINACIÓN SUBSUELO', prov:'Pablo Fidi', inicio:'May-25', contrato:1114350, erogado:1114350, cobrado:6570870, resultado:5456520},
+  {n:14, desc:'ADICIONALES ELECTRICIDAD', prov:'Pablo Fidi', inicio:'Ago-25', contrato:0, erogado:0, cobrado:22640293, resultado:22640293},
+  {n:15, desc:'HERRERÍA: DIVISORES PATIOS', prov:'Leo Gallardo', inicio:'Dic-25', contrato:1000000, erogado:1000000, cobrado:4661000, resultado:3661000},
+  {n:16, desc:'ALBAÑILERÍA (CON CARGAS)', prov:'Varios (Vic. Rolon, J. Benitez)', inicio:'Jul-24', contrato:240454725, erogado:240454725, cobrado:364875683, resultado:124420958},
+  {n:17, desc:'TERMINACIONES', prov:'Julio Cabrera', inicio:'—', contrato:11760000, erogado:11760000, cobrado:13440000, resultado:1680000},
+];
+
+const contratosSDE = [
+  {n:1, desc:'HORMIGÓN', prov:'Joel Benitez', inicio:'Sep-24', presup:0, erogado:182444134, cargas:49807249, cobrado:495000000, resultado:262748617},
+];
+
+const ceramicos = [
+  {nombre:'C. CAÑUELAS ONIX 2da', medida:'61,5×61,5', total:3998, entregado:2633},
+  {nombre:'C. CAÑUELAS VARESE GRIS 2da', medida:'61,5×61,5', total:1197, entregado:958},
+  {nombre:'C. CAÑUELAS UMBRIO 2da', medida:'20×62', total:686, entregado:588},
+  {nombre:'TENDENZA ALABASTER 2da', medida:'30×62', total:3287, entregado:1992},
+  {nombre:'TENDENZA ANTHRACITE 2da', medida:'30×62', total:299, entregado:299},
+  {nombre:'TENDENZA SHAPED 2da', medida:'30×62', total:956, entregado:398},
+];
+
+function fmt(n) {
+  return '$' + Math.abs(n).toLocaleString('es-AR', {maximumFractionDigits:0});
+}
+
+function renderContratos() {
+  const tbody = document.getElementById('tablaContratos');
+  tbody.innerHTML = contratosSJ.map(c => {
+    const pct = c.contrato > 0 ? Math.min(100, (c.erogado/c.contrato)*100) : 100;
+    const color = c.resultado > 20000000 ? 'var(--green)' : c.resultado > 5000000 ? 'var(--accent)' : 'var(--blue)';
+    return `<tr>
+      <td style="color:var(--muted);font-family:'DM Mono',monospace;font-size:.75rem">${c.n}</td>
+      <td><strong>${c.desc}</strong></td>
+      <td><span class="proveedor-tag">${c.prov}</span></td>
+      <td style="font-size:.78rem;color:var(--muted);font-family:'DM Mono',monospace">${c.inicio}</td>
+      <td class="money neutral">${c.contrato > 0 ? fmt(c.contrato) : '—'}</td>
+      <td class="money neg">${fmt(c.erogado)}</td>
+      <td class="money pos">${fmt(c.cobrado)}</td>
+      <td class="money" style="color:${color}">${fmt(c.resultado)}</td>
+      <td style="min-width:80px">
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${color}"></div></div>
+        <div style="font-size:.65rem;color:var(--muted);font-family:'DM Mono',monospace;margin-top:.2rem">${Math.round(pct)}%</div>
+      </td>
+    </tr>`;
+  }).join('') + `<tr style="background:var(--surface2)">
+    <td colspan="4"><strong>TOTALES</strong></td>
+    <td class="money neutral"><strong>${fmt(530030402)}</strong></td>
+    <td class="money neg"><strong>${fmt(530030402)}</strong></td>
+    <td class="money pos"><strong>${fmt(949752799)}</strong></td>
+    <td class="money pos" style="color:var(--green)"><strong>${fmt(419722397)}</strong></td>
+    <td></td>
+  </tr>`;
+}
+
+function renderContratosSDE() {
+  const tbody = document.getElementById('tablaContratosSde');
+  tbody.innerHTML = contratosSDE.map(c => `<tr>
+    <td style="color:var(--muted);font-family:'DM Mono',monospace;font-size:.75rem">${c.n}</td>
+    <td><strong>${c.desc}</strong></td>
+    <td><span class="proveedor-tag">${c.prov}</span></td>
+    <td style="font-size:.78rem;color:var(--muted);font-family:'DM Mono',monospace">${c.inicio}</td>
+    <td class="money neutral">—</td>
+    <td class="money neg">${fmt(c.erogado)}</td>
+    <td class="money neg">${fmt(c.cargas)}</td>
+    <td class="money pos">${fmt(c.cobrado)}</td>
+    <td class="money pos" style="color:var(--green)">${fmt(c.resultado)}</td>
+  </tr>`).join('');
+}
+
+function renderCeramicos() {
+  const list = document.getElementById('ceramicosList');
+  list.innerHTML = ceramicos.map(c => {
+    const pct = Math.round((c.entregado / c.total) * 100);
+    const color = pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--accent)' : 'var(--red)';
+    return `<div class="ceramico-item">
+      <div>
+        <div class="ceramico-nombre">${c.nombre}</div>
+        <div class="ceramico-medida">${c.medida}</div>
+      </div>
+      <div class="ceramico-bar">
+        <div style="display:flex;justify-content:space-between;font-size:.7rem;font-family:'DM Mono',monospace;margin-bottom:.3rem">
+          <span style="color:var(--muted)">${c.entregado.toLocaleString('es-AR')} m²</span>
+          <span style="color:${color}">${pct}%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${color}"></div></div>
+        <div class="ceramico-pct" style="color:var(--muted)">de ${c.total.toLocaleString('es-AR')} m²</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function setBloque(bloque, btn) {
+  document.querySelectorAll('.bloque-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const sj = document.getElementById('secSanJose');
+  const sde = document.getElementById('secSantiago');
+  if (bloque === 'ambos') { sj.style.display='block'; sde.style.display='block'; }
+  else if (bloque === 'sanjose') { sj.style.display='block'; sde.style.display='none'; }
+  else { sj.style.display='none'; sde.style.display='block'; }
+}
+
+renderContratos();
+renderContratosSDE();
+renderCeramicos();
+</script>
+</body>
+</html>
