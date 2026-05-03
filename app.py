@@ -2,116 +2,113 @@ from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 import os
 import json
+import requests
 from datetime import datetime
-import anthropic
 
 app = Flask(__name__)
 
-# Cliente de Anthropic
-claude_client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
-# Base de datos simple en memoria (en producción usarías una base de datos real)
+# Base de datos simple en memoria
 datos = {
     "movimientos": [],
     "acopios": []
 }
 
-SYSTEM_PROMPT = """Sos el asistente de ObraManager para la constructora Aeme Obras.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+def procesar_con_ia(mensaje):
+    """Procesa el mensaje con Claude via API REST"""
+    try:
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        
+        system_prompt = """Sos el asistente de ObraManager para la constructora Aeme Obras.
 Ayudás a Julián y Julieta a gestionar obras de construcción vía WhatsApp.
 
 Podés hacer estas acciones:
 1. CONSULTAR saldo de caja por obra
-2. REGISTRAR un gasto o ingreso
-3. CONSULTAR stock de materiales (acopio)
+2. REGISTRAR un gasto o ingreso  
+3. CONSULTAR stock de materiales
 4. REGISTRAR retiro de materiales
 
-Cuando el usuario quiera registrar algo, respondé con un JSON así:
-{"accion": "registrar_gasto", "obra": "nombre", "monto": 1000, "descripcion": "cemento", "proveedor": "Corralón XYZ"}
-{"accion": "registrar_ingreso", "obra": "nombre", "monto": 5000, "descripcion": "anticipo cliente"}
-{"accion": "registrar_acopio", "material": "cemento", "cantidad": 50, "unidad": "bolsas", "obra": "nombre"}
+Cuando el usuario quiera registrar algo, incluí un JSON en tu respuesta así:
+ACCION:{"tipo": "gasto", "obra": "nombre", "monto": 1000, "descripcion": "cemento"}
+ACCION:{"tipo": "ingreso", "obra": "nombre", "monto": 5000, "descripcion": "anticipo"}
 
 Para consultas, respondé directamente en texto amigable.
-Siempre hablá en español rioplatense, de forma clara y concisa.
-Si no entendés algo, pedí que te lo aclaren."""
+Hablá en español rioplatense, de forma clara y concisa. Máximo 3 oraciones."""
 
-def procesar_con_ia(mensaje, historial=[]):
-    """Procesa el mensaje con Claude"""
-    try:
-        messages = historial + [{"role": "user", "content": mensaje}]
+        payload = {
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 300,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": mensaje}]
+        }
         
-        response = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=500,
-            system=SYSTEM_PROMPT,
-            messages=messages
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json=payload,
+            timeout=15
         )
         
-        respuesta = response.content[0].text
-        
-        # Intentar detectar si es un JSON de acción
-        try:
-            if "{" in respuesta and "accion" in respuesta:
-                inicio = respuesta.index("{")
-                fin = respuesta.rindex("}") + 1
-                json_str = respuesta[inicio:fin]
-                accion = json.loads(json_str)
-                ejecutar_accion(accion)
-                # Respuesta al usuario después de ejecutar
-                return f"✅ ¡Registrado! {respuesta[:inicio].strip()}"
-        except:
-            pass
+        if response.status_code == 200:
+            data = response.json()
+            respuesta = data["content"][0]["text"]
             
-        return respuesta
-        
+            # Detectar y ejecutar acciones
+            if "ACCION:" in respuesta:
+                try:
+                    inicio = respuesta.index("ACCION:") + 7
+                    fin = respuesta.index("}", inicio) + 1
+                    json_str = respuesta[inicio:fin]
+                    accion = json.loads(json_str)
+                    ejecutar_accion(accion)
+                    respuesta = respuesta.replace(f"ACCION:{json_str}", "").strip()
+                    return f"✅ Registrado! {respuesta}"
+                except:
+                    pass
+            
+            return respuesta
+        else:
+            return f"Error al procesar: {response.status_code}"
+            
     except Exception as e:
-        return f"Ocurrió un error: {str(e)}"
+        return f"Error: {str(e)}"
 
 def ejecutar_accion(accion):
-    """Ejecuta una acción sobre los datos"""
-    tipo = accion.get("accion")
     ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    tipo = accion.get("tipo", "")
     
-    if tipo == "registrar_gasto":
+    if tipo in ["gasto", "egreso"]:
         datos["movimientos"].append({
             "fecha": ahora,
             "tipo": "egreso",
             "obra": accion.get("obra", "General"),
             "monto": accion.get("monto", 0),
-            "descripcion": accion.get("descripcion", ""),
-            "proveedor": accion.get("proveedor", "")
+            "descripcion": accion.get("descripcion", "")
         })
-    elif tipo == "registrar_ingreso":
+    elif tipo in ["ingreso"]:
         datos["movimientos"].append({
             "fecha": ahora,
-            "tipo": "ingreso",
+            "tipo": "ingreso", 
             "obra": accion.get("obra", "General"),
             "monto": accion.get("monto", 0),
             "descripcion": accion.get("descripcion", "")
         })
-    elif tipo == "registrar_acopio":
-        datos["acopios"].append({
-            "fecha": ahora,
-            "material": accion.get("material", ""),
-            "cantidad": accion.get("cantidad", 0),
-            "unidad": accion.get("unidad", ""),
-            "obra": accion.get("obra", "General")
-        })
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Recibe mensajes de WhatsApp via Twilio"""
     mensaje_entrante = request.form.get("Body", "")
     remitente = request.form.get("From", "")
-    
     print(f"Mensaje de {remitente}: {mensaje_entrante}")
     
-    # Procesar con IA
     respuesta = procesar_con_ia(mensaje_entrante)
     
-    # Responder via Twilio
     resp = MessagingResponse()
     resp.message(respuesta)
-    
     return str(resp)
 
 @app.route("/")
@@ -120,7 +117,6 @@ def home():
 
 @app.route("/datos")
 def ver_datos():
-    """Endpoint para ver los datos registrados"""
     return json.dumps(datos, ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
