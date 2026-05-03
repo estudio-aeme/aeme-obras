@@ -355,32 +355,48 @@ def procesar_mensaje(mensaje, remitente):
         # ── LISTAR CONTRATOS ──
         elif intencion == "listar_contratos":
             tipo_lista = data.get("tipo", "compra")
+            # Detectar si el usuario quiere solo con saldo pendiente
+            solo_pendientes = any(w in mensaje.lower() for w in ["activo","vigente","pendiente","saldo","abierto","en curso"])
             conn = get_db()
             if tipo_lista == "compra":
                 rows = conn.run("SELECT bloque, descripcion, proveedor, presupuesto, pagado FROM contratos_compra WHERE activo=TRUE ORDER BY bloque, id")
                 conn.close()
                 bloque_actual = ""
-                resp = "🔵 *CONTRATOS DE COMPRA*\n"
+                resp = "🔵 *CONTRATOS DE COMPRA" + (" CON SALDO*\n" if solo_pendientes else "*\n")
+                encontrados = 0
                 for row in rows:
                     bl, desc, prov, ppto, pagado = row
+                    pendiente = float(ppto) - float(pagado)
+                    pct = (float(pagado)/float(ppto)*100) if float(ppto)>0 else 0
+                    if solo_pendientes and pendiente <= 0:
+                        continue
                     if bl != bloque_actual:
                         resp += f"\n📍 *{bl}*\n"
                         bloque_actual = bl
-                    pct = (float(pagado)/float(ppto)*100) if float(ppto)>0 else 0
-                    resp += f"  • {desc} ({prov[:15]}): {pct:.0f}% pagado\n"
+                    resp += f"  • {desc} ({prov[:15]})\n    Pagado: {pct:.0f}% | Pendiente: {fmt_ars(pendiente)}\n"
+                    encontrados += 1
+                if encontrados == 0:
+                    resp += "\nNo hay contratos con saldo pendiente."
             else:
                 rows = conn.run("SELECT bloque, descripcion, presupuesto, cobrado, cobrado_cac FROM contratos_venta WHERE activo=TRUE ORDER BY bloque, id")
                 conn.close()
                 bloque_actual = ""
-                resp = "🟢 *CONTRATOS DE VENTA*\n"
+                resp = "🟢 *CONTRATOS DE VENTA" + (" CON SALDO*\n" if solo_pendientes else "*\n")
+                encontrados = 0
                 for row in rows:
                     bl, desc, ppto, cobrado, cob_cac = row
+                    total = float(cobrado)+float(cob_cac)
+                    pendiente = float(ppto) - total
+                    pct = (total/float(ppto)*100) if float(ppto)>0 else 0
+                    if solo_pendientes and pendiente <= 0:
+                        continue
                     if bl != bloque_actual:
                         resp += f"\n📍 *{bl}*\n"
                         bloque_actual = bl
-                    total = float(cobrado)+float(cob_cac)
-                    pct = (total/float(ppto)*100) if float(ppto)>0 else 0
-                    resp += f"  • {desc}: {pct:.0f}% cobrado\n"
+                    resp += f"  • {desc}\n    Cobrado: {pct:.0f}% | Pendiente: {fmt_ars(pendiente)}\n"
+                    encontrados += 1
+                if encontrados == 0:
+                    resp += "\nNo hay contratos con saldo pendiente."
             return resp
 
         # ── OTRO ──
