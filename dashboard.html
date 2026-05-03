@@ -1,0 +1,349 @@
+dashboard.html<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ObraManager — Aeme Obras</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --surface: #1a1a1a;
+    --surface2: #242424;
+    --border: #2e2e2e;
+    --accent: #f0a500;
+    --accent2: #e05c2a;
+    --green: #2ecc71;
+    --red: #e74c3c;
+    --text: #f0ede8;
+    --muted: #888;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'DM Sans',sans-serif; min-height:100vh; }
+
+  /* HEADER */
+  header {
+    border-bottom:1px solid var(--border);
+    padding:1.5rem 2rem;
+    display:flex; align-items:center; justify-content:space-between;
+    position:sticky; top:0; background:var(--bg); z-index:100;
+  }
+  .logo { font-family:'Bebas Neue',sans-serif; font-size:2rem; letter-spacing:2px; color:var(--accent); }
+  .logo span { color:var(--text); }
+  .status-dot { width:8px; height:8px; border-radius:50%; background:var(--green); display:inline-block; margin-right:6px; animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .status-text { font-size:0.8rem; color:var(--muted); font-family:'DM Mono',monospace; }
+
+  /* LAYOUT */
+  .container { max-width:1400px; margin:0 auto; padding:2rem; }
+
+  /* KPI CARDS */
+  .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; margin-bottom:2.5rem; }
+  .kpi-card {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:12px; padding:1.5rem;
+    transition:border-color .2s;
+  }
+  .kpi-card:hover { border-color:var(--accent); }
+  .kpi-label { font-size:0.7rem; text-transform:uppercase; letter-spacing:2px; color:var(--muted); font-family:'DM Mono',monospace; margin-bottom:.5rem; }
+  .kpi-value { font-family:'Bebas Neue',sans-serif; font-size:2.2rem; letter-spacing:1px; }
+  .kpi-value.pos { color:var(--green); }
+  .kpi-value.neg { color:var(--red); }
+  .kpi-value.neutral { color:var(--accent); }
+
+  /* TABS */
+  .tabs { display:flex; gap:.5rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+  .tab-btn {
+    padding:.6rem 1.4rem; border-radius:8px; border:1px solid var(--border);
+    background:transparent; color:var(--muted); cursor:pointer;
+    font-family:'DM Sans',sans-serif; font-size:.85rem; transition:all .2s;
+  }
+  .tab-btn.active { background:var(--accent); color:#000; border-color:var(--accent); font-weight:600; }
+  .tab-btn:hover:not(.active) { border-color:var(--accent); color:var(--text); }
+
+  /* OBRA SELECTOR */
+  .obra-pills { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+  .obra-pill {
+    padding:.4rem 1rem; border-radius:99px; border:1px solid var(--border);
+    background:transparent; color:var(--muted); cursor:pointer;
+    font-size:.8rem; transition:all .15s;
+  }
+  .obra-pill.active { background:var(--accent2); color:#fff; border-color:var(--accent2); }
+  .obra-pill:hover:not(.active) { border-color:var(--text); color:var(--text); }
+
+  /* TABLE */
+  .table-wrap { overflow-x:auto; border-radius:12px; border:1px solid var(--border); }
+  table { width:100%; border-collapse:collapse; }
+  thead tr { background:var(--surface2); }
+  th { padding:.9rem 1.2rem; text-align:left; font-size:.7rem; text-transform:uppercase; letter-spacing:2px; color:var(--muted); font-family:'DM Mono',monospace; white-space:nowrap; }
+  td { padding:.9rem 1.2rem; border-top:1px solid var(--border); font-size:.88rem; }
+  tr:hover td { background:var(--surface2); }
+  .badge { display:inline-block; padding:.2rem .7rem; border-radius:99px; font-size:.72rem; font-family:'DM Mono',monospace; }
+  .badge.ingreso { background:#1a3a2a; color:var(--green); }
+  .badge.egreso { background:#3a1a1a; color:var(--red); }
+  .badge.acopio_ingreso { background:#1a2a3a; color:#5bc8fa; }
+  .badge.acopio_egreso { background:#2a1a3a; color:#c85bfa; }
+  .monto.pos { color:var(--green); font-family:'DM Mono',monospace; }
+  .monto.neg { color:var(--red); font-family:'DM Mono',monospace; }
+
+  /* RESUMEN POR OBRA */
+  .obras-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:1rem; }
+  .obra-card {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:12px; padding:1.5rem; transition:border-color .2s;
+  }
+  .obra-card:hover { border-color:var(--accent); }
+  .obra-name { font-family:'Bebas Neue',sans-serif; font-size:1.5rem; letter-spacing:1px; margin-bottom:1rem; color:var(--accent); }
+  .obra-row { display:flex; justify-content:space-between; padding:.4rem 0; border-bottom:1px solid var(--border); font-size:.85rem; }
+  .obra-row:last-child { border-bottom:none; }
+  .obra-saldo { font-family:'Bebas Neue',sans-serif; font-size:2rem; margin-top:1rem; }
+
+  /* STOCK */
+  .stock-item { display:flex; justify-content:space-between; align-items:center; padding:.7rem 1.2rem; border-top:1px solid var(--border); }
+  .stock-item:first-child { border-top:none; }
+  .stock-nombre { font-size:.88rem; }
+  .stock-obra { font-size:.72rem; color:var(--muted); font-family:'DM Mono',monospace; }
+  .stock-cantidad { font-family:'DM Mono',monospace; font-size:.9rem; }
+  .stock-cantidad.ok { color:var(--green); }
+  .stock-cantidad.low { color:var(--red); }
+
+  /* EMPTY */
+  .empty { text-align:center; padding:3rem; color:var(--muted); font-size:.9rem; }
+  .empty-icon { font-size:2.5rem; margin-bottom:.5rem; }
+
+  /* LOADING */
+  .loading { text-align:center; padding:3rem; color:var(--muted); }
+  .spinner { width:32px; height:32px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; margin:0 auto 1rem; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  /* SECTION TITLE */
+  .section-title { font-family:'Bebas Neue',sans-serif; font-size:1.2rem; letter-spacing:2px; color:var(--muted); margin-bottom:1rem; }
+
+  /* REFRESH BTN */
+  .refresh-btn {
+    padding:.5rem 1rem; border-radius:8px; border:1px solid var(--border);
+    background:transparent; color:var(--muted); cursor:pointer; font-size:.8rem;
+    font-family:'DM Mono',monospace; transition:all .2s;
+  }
+  .refresh-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+  .header-actions { display:flex; align-items:center; gap:1rem; }
+  .last-update { font-size:.72rem; color:var(--muted); font-family:'DM Mono',monospace; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Obra<span>Manager</span></div>
+  <div class="header-actions">
+    <span class="last-update" id="lastUpdate">—</span>
+    <button class="refresh-btn" onclick="loadAll()">↻ Actualizar</button>
+    <div>
+      <span class="status-dot"></span>
+      <span class="status-text">AEME OBRAS</span>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- KPIs -->
+  <div class="kpi-grid" id="kpiGrid">
+    <div class="kpi-card"><div class="kpi-label">Total Ingresos</div><div class="kpi-value pos" id="kpiIngresos">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Total Egresos</div><div class="kpi-value neg" id="kpiEgresos">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Saldo Global</div><div class="kpi-value neutral" id="kpiSaldo">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Obras Activas</div><div class="kpi-value neutral" id="kpiObras">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Movimientos</div><div class="kpi-value neutral" id="kpiMovs">—</div></div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="showTab('resumen')">📊 Resumen por Obra</button>
+    <button class="tab-btn" onclick="showTab('movimientos')">💰 Movimientos</button>
+    <button class="tab-btn" onclick="showTab('acopios')">📦 Acopios</button>
+  </div>
+
+  <!-- TAB: RESUMEN -->
+  <div id="tab-resumen">
+    <div class="obras-grid" id="obrasGrid">
+      <div class="loading"><div class="spinner"></div>Cargando obras...</div>
+    </div>
+  </div>
+
+  <!-- TAB: MOVIMIENTOS -->
+  <div id="tab-movimientos" style="display:none">
+    <div class="obra-pills" id="obraPills"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Fecha</th><th>Tipo</th><th>Obra</th><th>Descripción</th><th>Proveedor</th><th>Monto</th>
+        </tr></thead>
+        <tbody id="movTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB: ACOPIOS -->
+  <div id="tab-acopios" style="display:none">
+    <div class="section-title">Stock de Materiales por Obra</div>
+    <div class="table-wrap">
+      <div id="stockList"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = 'https://aeme-obras.onrender.com';
+let allMovimientos = [];
+let allStocks = [];
+let filtroObra = 'todas';
+
+async function loadAll() {
+  document.getElementById('lastUpdate').textContent = 'Actualizando...';
+  try {
+    const [resumen, datos] = await Promise.all([
+      fetch(API + '/resumen').then(r => r.json()),
+      fetch(API + '/datos').then(r => r.json())
+    ]);
+
+    const obras = resumen.obras || [];
+    allStocks = resumen.stocks || [];
+    allMovimientos = datos.movimientos || [];
+
+    // KPIs
+    let totalIng = 0, totalEgr = 0;
+    obras.forEach(o => {
+      totalIng += parseFloat(o[1]) || 0;
+      totalEgr += parseFloat(o[2]) || 0;
+    });
+    const saldo = totalIng - totalEgr;
+    document.getElementById('kpiIngresos').textContent = formatMoney(totalIng);
+    document.getElementById('kpiEgresos').textContent = formatMoney(totalEgr);
+    document.getElementById('kpiSaldo').textContent = formatMoney(saldo);
+    document.getElementById('kpiSaldo').className = 'kpi-value ' + (saldo >= 0 ? 'pos' : 'neg');
+    document.getElementById('kpiObras').textContent = obras.length;
+    document.getElementById('kpiMovs').textContent = allMovimientos.length;
+
+    // Resumen obras
+    renderObras(obras);
+
+    // Pills filtro
+    renderPills(obras);
+
+    // Tabla movimientos
+    renderMovimientos(allMovimientos);
+
+    // Stocks
+    renderStocks(allStocks);
+
+    document.getElementById('lastUpdate').textContent = 'Actualizado ' + new Date().toLocaleTimeString('es-AR');
+  } catch(e) {
+    document.getElementById('lastUpdate').textContent = 'Error al cargar';
+    console.error(e);
+  }
+}
+
+function formatMoney(n) {
+  return '$' + Math.abs(parseFloat(n)||0).toLocaleString('es-AR', {minimumFractionDigits:0, maximumFractionDigits:0});
+}
+
+function formatDate(str) {
+  if (!str) return '—';
+  const d = new Date(str);
+  return d.toLocaleDateString('es-AR') + ' ' + d.toLocaleTimeString('es-AR', {hour:'2-digit',minute:'2-digit'});
+}
+
+function renderObras(obras) {
+  const grid = document.getElementById('obrasGrid');
+  if (!obras.length) {
+    grid.innerHTML = '<div class="empty"><div class="empty-icon">🏗️</div>No hay obras registradas aún.<br>Mandá un mensaje al bot de WhatsApp para empezar.</div>';
+    return;
+  }
+  grid.innerHTML = obras.map(o => {
+    const nombre = o[0];
+    const ing = parseFloat(o[1]) || 0;
+    const egr = parseFloat(o[2]) || 0;
+    const saldo = parseFloat(o[3]) || 0;
+    return `
+      <div class="obra-card">
+        <div class="obra-name">${nombre}</div>
+        <div class="obra-row"><span>💰 Ingresos</span><span style="color:var(--green)">${formatMoney(ing)}</span></div>
+        <div class="obra-row"><span>📤 Egresos</span><span style="color:var(--red)">${formatMoney(egr)}</span></div>
+        <div class="obra-saldo ${saldo >= 0 ? 'pos' : 'neg'}">${saldo >= 0 ? '+' : '-'}${formatMoney(saldo)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderPills(obras) {
+  const pills = document.getElementById('obraPills');
+  const names = ['todas', ...obras.map(o => o[0])];
+  pills.innerHTML = names.map(n => `
+    <button class="obra-pill ${n === filtroObra ? 'active' : ''}" onclick="setFiltro('${n}')">${n === 'todas' ? '🏗️ Todas' : n}</button>
+  `).join('');
+}
+
+function setFiltro(obra) {
+  filtroObra = obra;
+  document.querySelectorAll('.obra-pill').forEach(p => p.classList.remove('active'));
+  event.target.classList.add('active');
+  const filtered = obra === 'todas' ? allMovimientos : allMovimientos.filter(m => m[3] === obra || (Array.isArray(m) && m[3] === obra));
+  renderMovimientos(filtered);
+}
+
+function renderMovimientos(movs) {
+  const tbody = document.getElementById('movTableBody');
+  if (!movs.length) {
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📋</div>No hay movimientos registrados.</div></td></tr>';
+    return;
+  }
+  // movs es array de arrays: [id, fecha, tipo, obra, monto, descripcion, proveedor, remitente]
+  tbody.innerHTML = [...movs].reverse().map(m => {
+    const tipo = m[2] || '';
+    const monto = parseFloat(m[4]) || 0;
+    const esIngreso = tipo === 'ingreso';
+    return `<tr>
+      <td style="color:var(--muted);font-family:'DM Mono',monospace;font-size:.8rem">${formatDate(m[1])}</td>
+      <td><span class="badge ${tipo}">${tipo}</span></td>
+      <td><strong>${m[3] || '—'}</strong></td>
+      <td>${m[5] || '—'}</td>
+      <td style="color:var(--muted)">${m[6] || '—'}</td>
+      <td class="monto ${esIngreso ? 'pos' : 'neg'}">${esIngreso ? '+' : '-'}${formatMoney(monto)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderStocks(stocks) {
+  const list = document.getElementById('stockList');
+  if (!stocks.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-icon">📦</div>No hay materiales en acopio aún.</div>';
+    return;
+  }
+  list.innerHTML = stocks.map(s => {
+    const cant = parseFloat(s[3]) || 0;
+    return `<div class="stock-item">
+      <div>
+        <div class="stock-nombre"><strong>${s[1]}</strong> <span style="color:var(--muted)">(${s[2]})</span></div>
+        <div class="stock-obra">${s[0]}</div>
+      </div>
+      <div class="stock-cantidad ${cant > 0 ? 'ok' : 'low'}">${cant > 0 ? '+' : ''}${cant} ${s[2]}</div>
+    </div>`;
+  }).join('');
+}
+
+function showTab(tab) {
+  ['resumen','movimientos','acopios'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t === tab ? 'block' : 'none';
+  });
+  document.querySelectorAll('.tab-btn').forEach((btn, i) => {
+    btn.classList.toggle('active', ['resumen','movimientos','acopios'][i] === tab);
+  });
+}
+
+// Auto-refresh cada 30 segundos
+loadAll();
+setInterval(loadAll, 30000);
+</script>
+</body>
+</html>
