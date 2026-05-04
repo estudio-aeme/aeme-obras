@@ -1,10 +1,12 @@
 """
 cert_module.py — Módulo de certificación ObraManager
-Estrategia: duplica el XML de la hoja anterior directamente en el ZIP del xlsx.
-Preserva 100% el formato, fórmulas y estilos originales.
+Estrategia: usa openpyxl para manipular el .xlsx de forma robusta.
+Preserva formato, fórmulas y estilos al duplicar la hoja del cert anterior.
 """
-import os, io, json, zipfile, re, requests
-from datetime import datetime
+import os, io, json, re, requests
+from datetime import datetime, date
+
+import openpyxl
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
@@ -43,6 +45,9 @@ for i in range(1, 15):
     PISO_ALIAS[f"PISO {i}"] = f"PISO {i}°"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers de Google Drive
+# ─────────────────────────────────────────────────────────────────────────────
 def _token():
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
     if not sa_json:
@@ -81,197 +86,64 @@ def _upload_new(folder_id, name, data, mime):
     return r.json().get("id")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Manipulación del xlsx con openpyxl
+# ─────────────────────────────────────────────────────────────────────────────
 def _excel_serial(dt):
     """Convierte datetime a número serial de Excel."""
-    from datetime import date
     base = date(1899, 12, 30)
     return (dt.date() - base).days
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIX: Parser robusto de relaciones del xlsx
-# ─────────────────────────────────────────────────────────────────────────────
-def _parse_relationships(rels_xml):
+def _leer_acumulados_anteriores(ws_anterior):
+    """Lee los valores de la columna J (acumulado) del cert anterior por cada fila relevante."""
+    prev_j = {}
+    if ws_anterior is None:
+        return prev_j
+
+    for piso, tareas_map in DURLOCK_ROWS.items():
+        for tarea, row_num in tareas_map.items():
+            cell = ws_anterior.cell(row=row_num, column=10)  # col J = 10
+            try:
+                val = cell.value
+                if isinstance(val, (int, float)):
+                    prev_j[row_num] = float(val)
+                elif isinstance(val, str) and val.strip():
+                    s = val.strip().replace('%', '').replace(',', '.')
+                    try:
+                        num = float(s)
+                        if num > 1:
+                            num = num / 100.0
+                        prev_j[row_num] = num
+                    except ValueError:
+                        prev_j[row_num] = 0.0
+                else:
+                    prev_j[row_num] = 0.0
+            except Exception:
+                prev_j[row_num] = 0.0
+
+    return prev_j
+
+
+def _aplicar_avances_a_hoja(ws, num_cert, fecha_serial, avances_por_fila):
     """
-    Parsea el XML de _rels devolviendo dict {rId: {"target": ..., "type": ...}}.
-    Es robusto al orden de atributos dentro de cada <Relationship>.
-    """
-    rels = {}
-    # Encontrar cada tag <Relationship .../> individualmente
-    for tag in re.findall(r'<Relationship\b[^/>]*/?>', rels_xml):
-        rid_m = re.search(r'\bId="([^"]+)"', tag)
-        target_m = re.search(r'\bTarget="([^"]+)"', tag)
-        type_m = re.search(r'\bType="([^"]+)"', tag)
-        if rid_m and target_m:
-            rels[rid_m.group(1)] = {
-                "target": target_m.group(1),
-                "type": type_m.group(1) if type_m else "",
-            }
-    return rels
-
-
-def _resolve_sheet_path(target):
-    """Normaliza un Target del rels al path real dentro del ZIP."""
-    if target.startswith('/'):
-        return target.lstrip('/')
-    if target.startswith('xl/'):
-        return target
-    return f"xl/{target}"
-
-
-def _modify_sheet_xml(sheet_xml, num_cert, fecha_serial, avances_por_fila):
-    """
-    Modifica el XML de la hoja duplicada:
+    Modifica la hoja:
     - M1: número de cert
-    - M2: fecha
-    - Para cada fila: H = nuevo anterior, J = nuevo acumulado
+    - M2: fecha (serial)
+    - Columnas H y J de cada fila: nuevos valores
+    Conserva fórmulas y estilos en el resto.
     """
-    lines = sheet_xml
+    ws.cell(row=1, column=13).value = num_cert       # M1
+    ws.cell(row=2, column=13).value = fecha_serial   # M2
 
-    # Reemplazar M1 (número cert) — manejar también <v/> vacío y celdas con t=
-    lines = re.sub(
-        r'(<c r="M1"[^>]*>)(?:<f>[^<]*</f>)?(?:<v>[^<]*</v>|<v/>)',
-        rf'\g<1><v>{num_cert}</v>', lines)
-
-    # Reemplazar M2 (fecha)
-    lines = re.sub(
-        r'(<c r="M2"[^>]*>)(?:<f>[^<]*</f>)?(?:<v>[^<]*</v>|<v/>)',
-        rf'\g<1><v>{fecha_serial}</v>', lines)
-
-    # Reemplazar valores H y J por cada fila
     for row_num, (nuevo_h, nuevo_j) in avances_por_fila.items():
-        lines = re.sub(
-            rf'(<c r="H{row_num}"[^>]*>)(?:<f>[^<]*</f>)?(?:<v>[^<]*</v>|<v/>)',
-            rf'\g<1><v>{nuevo_h}</v>', lines)
-        lines = re.sub(
-            rf'(<c r="J{row_num}"[^>]*>)(?:<f>[^<]*</f>)?(?:<v>[^<]*</v>|<v/>)',
-            rf'\g<1><v>{nuevo_j}</v>', lines)
-
-    return lines
+        ws.cell(row=row_num, column=8).value = nuevo_h    # col H = 8
+        ws.cell(row=row_num, column=10).value = nuevo_j   # col J = 10
 
 
-def _duplicar_xlsx_con_nueva_hoja(xlsx_bytes, src_sheet_name, new_sheet_name,
-                                   num_cert, fecha_serial, avances_por_fila):
-    """
-    Duplica el xlsx añadiendo una nueva hoja copiada del sheet anterior,
-    modificando solo los valores editables. Retorna el nuevo xlsx como bytes.
-    """
-    with zipfile.ZipFile(io.BytesIO(xlsx_bytes), 'r') as zin:
-        all_files = zin.namelist()
-
-        # Leer workbook.xml y rels
-        wb_xml = zin.read('xl/workbook.xml').decode('utf-8')
-        rels_xml = zin.read('xl/_rels/workbook.xml.rels').decode('utf-8')
-
-        # Parsear todas las relaciones de forma robusta
-        rels = _parse_relationships(rels_xml)
-        print(f"[DEBUG] rIds disponibles en rels: {list(rels.keys())}")
-
-        # Encontrar todos los sheets en workbook.xml (manejar r:id y r:Id)
-        sheets_in_wb = re.findall(
-            r'<sheet\s+[^/]*name="([^"]+)"[^/]*r:id="([^"]+)"',
-            wb_xml
-        )
-        if not sheets_in_wb:
-            # Variante con orden de atributos invertido
-            sheets_in_wb = []
-            for tag in re.findall(r'<sheet\b[^/]*/?>', wb_xml):
-                n_m = re.search(r'\bname="([^"]+)"', tag)
-                r_m = re.search(r'\br:id="([^"]+)"', tag)
-                if n_m and r_m:
-                    sheets_in_wb.append((n_m.group(1), r_m.group(1)))
-
-        print(f"[DEBUG] Hojas en workbook: {sheets_in_wb}")
-
-        src_rid = next((rid for sname, rid in sheets_in_wb if sname == src_sheet_name), None)
-        if not src_rid:
-            raise Exception(f"No encontré la hoja '{src_sheet_name}' en workbook.xml")
-
-        if src_rid not in rels:
-            raise Exception(
-                f"rId '{src_rid}' de la hoja '{src_sheet_name}' no existe en _rels. "
-                f"rIds disponibles: {list(rels.keys())}"
-            )
-
-        src_target = rels[src_rid]["target"]
-        src_path = _resolve_sheet_path(src_target)
-        print(f"[DEBUG] Hoja fuente: {src_path}")
-
-        if src_path not in all_files:
-            raise Exception(f"El archivo de la hoja '{src_path}' no existe en el ZIP")
-
-        # Leer el XML de la hoja fuente
-        src_xml = zin.read(src_path).decode('utf-8')
-
-        # Modificar el XML con los nuevos valores
-        new_xml = _modify_sheet_xml(src_xml, num_cert, fecha_serial, avances_por_fila)
-
-        # Determinar el próximo número de hoja (sheet{N}.xml) sin colisión
-        existing_sheet_nums = [
-            int(re.search(r'sheet(\d+)\.xml', f).group(1))
-            for f in all_files if re.match(r'xl/worksheets/sheet\d+\.xml', f)
-        ]
-        next_num = (max(existing_sheet_nums) if existing_sheet_nums else 0) + 1
-        new_file = f"xl/worksheets/sheet{next_num}.xml"
-
-        # rId único: tomar el max numérico actual + 1
-        existing_rid_nums = []
-        for rid in rels.keys():
-            m = re.match(r'rId(\d+)', rid)
-            if m:
-                existing_rid_nums.append(int(m.group(1)))
-        next_rid_num = (max(existing_rid_nums) if existing_rid_nums else 0) + 1
-        new_rid = f"rId{next_rid_num}"
-
-        # Determinar próximo sheetId (atributo de <sheet>) sin colisión
-        existing_sheet_ids = [int(m) for m in re.findall(r'<sheet\b[^/]*sheetId="(\d+)"', wb_xml)]
-        next_sheet_id = (max(existing_sheet_ids) if existing_sheet_ids else 0) + 1
-
-        print(f"[DEBUG] Nuevo sheet: file={new_file}, rId={new_rid}, sheetId={next_sheet_id}")
-
-        # Construir nuevo ZIP
-        out = io.BytesIO()
-        with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zout:
-            for item in all_files:
-                data = zin.read(item)
-
-                if item == 'xl/workbook.xml':
-                    decoded = data.decode('utf-8')
-                    new_sheet_entry = (
-                        f'<sheet name="{new_sheet_name}" '
-                        f'sheetId="{next_sheet_id}" r:id="{new_rid}"/>'
-                    )
-                    decoded = decoded.replace('</sheets>', f'{new_sheet_entry}</sheets>')
-                    data = decoded.encode('utf-8')
-
-                elif item == 'xl/_rels/workbook.xml.rels':
-                    decoded = data.decode('utf-8')
-                    new_rel = (
-                        f'<Relationship '
-                        f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
-                        f'Target="worksheets/sheet{next_num}.xml" '
-                        f'Id="{new_rid}"/>'
-                    )
-                    decoded = decoded.replace('</Relationships>', f'{new_rel}</Relationships>')
-                    data = decoded.encode('utf-8')
-
-                elif item == '[Content_Types].xml':
-                    decoded = data.decode('utf-8')
-                    new_ct = (
-                        f'<Override PartName="/xl/worksheets/sheet{next_num}.xml" '
-                        f'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-                    )
-                    decoded = decoded.replace('</Types>', f'{new_ct}</Types>')
-                    data = decoded.encode('utf-8')
-
-                zout.writestr(item, data)
-
-            # Agregar la nueva hoja
-            zout.writestr(new_file, new_xml.encode('utf-8'))
-
-        return out.getvalue()
-
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Parser de avances con LLM
+# ─────────────────────────────────────────────────────────────────────────────
 def _parse_avances(mensaje):
     system = """Parsea certificados de Durlock MO para Santiago del Estero.
 Respondé SOLO JSON válido sin texto extra:
@@ -291,6 +163,9 @@ Tareas: "Armado de estructura según plano", "Emplacado general", "Masillado e i
     return json.loads(text)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Generador de PDF
+# ─────────────────────────────────────────────────────────────────────────────
 def _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert):
     """Genera PDF con reportlab o fpdf2."""
     try:
@@ -374,6 +249,9 @@ def _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert):
             return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Función principal
+# ─────────────────────────────────────────────────────────────────────────────
 def certificar_durlock(mensaje, num_whatsapp=None):
     try:
         # 1. Parsear avances
@@ -396,62 +274,40 @@ def certificar_durlock(mensaje, num_whatsapp=None):
             fecha_dt = datetime.now()
         fecha_serial = _excel_serial(fecha_dt)
 
-        # 2. Descargar xlsx
+        # 2. Descargar xlsx desde Drive
         xlsx_bytes = _download(DRIVE["durlock"]["xlsx"])
+        print(f"[DEBUG] xlsx descargado: {len(xlsx_bytes)} bytes")
 
-        # 3. Detectar última hoja de cert para copiar
-        with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as zf:
-            wb_xml = zf.read('xl/workbook.xml').decode('utf-8')
-            rels_xml = zf.read('xl/_rels/workbook.xml.rels').decode('utf-8')
+        # 3. Abrir con openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+        print(f"[DEBUG] Hojas en workbook: {wb.sheetnames}")
 
-        cert_sheets = re.findall(r'<sheet name="(CERT N°(\d+))"', wb_xml)
+        # 4. Detectar última hoja CERT
+        cert_sheets = []
+        for sname in wb.sheetnames:
+            m = re.match(r'^CERT N°(\d+)$', sname.strip())
+            if m:
+                cert_sheets.append((sname, int(m.group(1))))
+
         if cert_sheets:
-            cert_nums_found = [(name, int(n)) for name, n in cert_sheets]
-            cert_nums_found.sort(key=lambda x: x[1])
-            last_cert_name, last_cert_num = cert_nums_found[-1]
+            cert_sheets.sort(key=lambda x: x[1])
+            last_cert_name, last_cert_num = cert_sheets[-1]
             num_cert = last_cert_num + 1
         else:
             last_cert_name = None
             num_cert = 1
 
         new_sheet_name = f"CERT N°{num_cert}"
-        print(f"[DEBUG] Generando {new_sheet_name} basado en {last_cert_name}")
+        print(f"[DEBUG] Generando '{new_sheet_name}' basado en '{last_cert_name}'")
 
-        # 4. Leer acumulados del cert anterior usando el parser robusto
+        # 5. Leer acumulados del cert anterior (col J)
         prev_j_values = {}
         if last_cert_name:
-            with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as zf:
-                rels = _parse_relationships(rels_xml)
+            ws_prev = wb[last_cert_name]
+            prev_j_values = _leer_acumulados_anteriores(ws_prev)
+            print(f"[DEBUG] Acumulados leidos del cert anterior: {len(prev_j_values)} filas")
 
-                # Buscar rId de la hoja del último cert
-                sheets_in_wb = []
-                for tag in re.findall(r'<sheet\b[^/]*/?>', wb_xml):
-                    n_m = re.search(r'\bname="([^"]+)"', tag)
-                    r_m = re.search(r'\br:id="([^"]+)"', tag)
-                    if n_m and r_m:
-                        sheets_in_wb.append((n_m.group(1), r_m.group(1)))
-
-                src_rid = next((rid for name, rid in sheets_in_wb if name == last_cert_name), None)
-
-                if src_rid and src_rid in rels:
-                    src_path = _resolve_sheet_path(rels[src_rid]["target"])
-                    if src_path in zf.namelist():
-                        prev_xml = zf.read(src_path).decode('utf-8')
-
-                        for piso, tareas_map in DURLOCK_ROWS.items():
-                            for tarea, row_num in tareas_map.items():
-                                j_match = re.search(
-                                    rf'<c r="J{row_num}"[^>]*>(?:<f>[^<]*</f>)?<v>([^<]*)</v>',
-                                    prev_xml)
-                                if j_match:
-                                    try:
-                                        prev_j_values[row_num] = float(j_match.group(1))
-                                    except ValueError:
-                                        prev_j_values[row_num] = 0.0
-                else:
-                    print(f"[WARN] No pude leer acumulados del cert anterior (rId={src_rid})")
-
-        # 5. Construir mapa de cambios: {row_num: (nuevo_H, nuevo_J)}
+        # 6. Construir mapa de cambios: {row_num: (nuevo_H, nuevo_J)}
         avances_por_fila = {}
         lineas_avance = []
         monto_cert_est = 0
@@ -474,24 +330,39 @@ def certificar_durlock(mensaje, num_whatsapp=None):
                 tarea_corta = tarea_key.replace("según plano", "").replace("e iluminacion", "").strip()
                 lineas_avance.append(f"  • {piso} — {tarea_corta}: {pct_act}%")
 
-        # Pisos NO mencionados: H = J = acumulado anterior
+        # Pisos NO mencionados: H = J = acumulado anterior (sin avance nuevo)
         for piso, tareas_map in DURLOCK_ROWS.items():
             for tarea, row_num in tareas_map.items():
                 if row_num not in avances_por_fila:
                     prev_j = prev_j_values.get(row_num, 0.0)
                     avances_por_fila[row_num] = (prev_j, prev_j)
 
-        # 6. Duplicar xlsx con nueva hoja
-        xlsx_nuevo = _duplicar_xlsx_con_nueva_hoja(
-            xlsx_bytes, last_cert_name, new_sheet_name,
-            num_cert, fecha_serial, avances_por_fila
-        )
+        # 7. Duplicar hoja con openpyxl (preserva formato, fórmulas y estilos)
+        if last_cert_name:
+            src_ws = wb[last_cert_name]
+            new_ws = wb.copy_worksheet(src_ws)
+            new_ws.title = new_sheet_name
+        else:
+            new_ws = wb.create_sheet(title=new_sheet_name)
 
-        # 7. Subir xlsx al Drive
+        print(f"[DEBUG] Hoja duplicada: '{new_ws.title}'")
+
+        # 8. Aplicar valores en la hoja nueva
+        _aplicar_avances_a_hoja(new_ws, num_cert, fecha_serial, avances_por_fila)
+        print(f"[DEBUG] Valores aplicados en {len(avances_por_fila)} filas")
+
+        # 9. Guardar a bytes
+        out = io.BytesIO()
+        wb.save(out)
+        xlsx_nuevo = out.getvalue()
+        print(f"[DEBUG] xlsx generado: {len(xlsx_nuevo)} bytes")
+
+        # 10. Subir xlsx al Drive (sobrescribe)
         _update_drive(DRIVE["durlock"]["xlsx"], xlsx_nuevo,
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        print(f"[DEBUG] xlsx subido a Drive OK")
 
-        # 8. Generar y subir PDF
+        # 11. Generar y subir PDF
         pdf_str = ""
         try:
             pdf_bytes = _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert_est)
@@ -503,7 +374,7 @@ def certificar_durlock(mensaje, num_whatsapp=None):
         except Exception as pe:
             print(f"PDF skip: {pe}")
 
-        # 9. Respuesta
+        # 12. Respuesta
         respuesta = (
             f"✅ *{new_sheet_name} — Durlock interno*\n"
             f"📅 {fecha_dt.strftime('%d/%m/%Y')}\n\n"
