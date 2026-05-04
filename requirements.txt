@@ -3,3 +3,5 @@ twilio
 psycopg2-binary
 requests
 gunicorn
+google-auth
+openpyxl
