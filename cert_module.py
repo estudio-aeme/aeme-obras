@@ -375,7 +375,9 @@ def certificar_durlock(mensaje, num_whatsapp=None):
         return respuesta, True
 
     except Exception as e:
-        return f"❌ Error generando certificado: {str(e)}", False
+        import traceback
+        print(f"CERT ERROR: {traceback.format_exc()}")
+        return f"❌ Error: {str(e)}", False
 
 
 def _xlsx_a_pdf(xlsx_bytes, sheet_name):
