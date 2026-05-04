@@ -163,7 +163,10 @@ def _duplicar_xlsx_con_nueva_hoja(xlsx_bytes, src_sheet_name, new_sheet_name,
             raise Exception(f"No encontré la hoja '{src_sheet_name}'")
         
         # Encontrar el archivo de la hoja fuente
-        src_file_match = re.search(rf'Id="{src_rid}"[^/]*Target="([^"]+)"', rels_xml)
+        # Buscar target — puede venir antes o después del Id
+        src_file_match = re.search(rf'Id="{src_rid}"[^>]*Target="([^"]+)"', rels_xml)
+        if not src_file_match:
+            src_file_match = re.search(rf'Target="([^"]+)"[^>]*Id="{src_rid}"', rels_xml)
         if not src_file_match:
             raise Exception(f"No encontré el archivo para rId={src_rid}")
         
@@ -380,7 +383,10 @@ def certificar_durlock(mensaje, num_whatsapp=None):
                 sheets_in_wb = re.findall(r'<sheet name="([^"]+)"[^/]*r:id="([^"]+)"', wb_xml)
                 src_rid = next((rid for name, rid in sheets_in_wb if name == last_cert_name), None)
                 if src_rid:
-                    src_match = re.search(rf'Id="{src_rid}"[^/]*Target="([^"]+)"', rels_xml)
+                    # Buscar target del rId en rels (puede tener / al inicio)
+                    src_match = re.search(rf'Id="{src_rid}"[^>]*Target="([^"]+)"', rels_xml)
+                    if not src_match:
+                        src_match = re.search(rf'Target="([^"]+)"[^>]*Id="{src_rid}"', rels_xml)
                     if src_match:
                         src_target = src_match.group(1)
                         src_path = src_target.lstrip('/')
