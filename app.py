@@ -543,32 +543,46 @@ def ver_contratos():
 def reset_sde():
     try:
         conn = get_db()
+        # Limpiar SDE completamente
         conn.run("DELETE FROM contratos_compra WHERE bloque='Santiago del Estero'")
         conn.run("DELETE FROM contratos_venta WHERE bloque='Santiago del Estero'")
+
+        # COMPRA — datos reales de Drive (mayo 2026)
+        # Albañileria: ppto $430M, pagado $286.2M + cargas $75.9M
+        # Electricidad: ppto $600M, pagado $38.2M (7 certs)
+        # Sanitarias: ppto $600M, pagado $68.3M (6 certs)
+        # Pre-inst AA: ppto $119.5M, pagado $47.8M
+        # Durlock: ppto $200M estimado, pagado $2.05M (inicio)
         nuevos_compra = [
-            ("Constitución","Santiago del Estero","ALBAÑILERÍA","Joel Benitez",430000000,286232463,75878237),
-            ("Constitución","Santiago del Estero","INSTALACIÓN ELÉCTRICA","Pablo Fidi",600000000,38220519,0),
-            ("Constitución","Santiago del Estero","SANITARIAS","Ricardo Sequeira",600000000,68310219,0),
-            ("Constitución","Santiago del Estero","PRE-INSTALACIÓN AA","Ricardo Sequeira",119500000,47800000,0),
-            ("Constitución","Santiago del Estero","HERRERÍA MOLDES BALCONES","Leo Gallardo",6090000,6090000,0),
-            ("Constitución","Santiago del Estero","DURLOCK MO","Salazar",200000000,2050000,0),
+            ("Constitución","Santiago del Estero","ALBAÑILERÍA","Joel Benitez",        430000000, 286232463, 75878237),
+            ("Constitución","Santiago del Estero","INSTALACIÓN ELÉCTRICA","Pablo Fidi",600000000,  38220519,        0),
+            ("Constitución","Santiago del Estero","SANITARIAS","Ricardo Sequeira",     600000000,  68310219,        0),
+            ("Constitución","Santiago del Estero","PRE-INSTALACIÓN AA","Sequeira",     119500000,  47800000,        0),
+            ("Constitución","Santiago del Estero","DURLOCK MO","Salazar",              200000000,   2050000,        0),
         ]
+        # VENTA — cobros al cliente por cada contrato
         nuevos_venta = [
-            ("Constitución","Santiago del Estero","ALBAÑILERÍA",1214627824,592717300,113850202),
-            ("Constitución","Santiago del Estero","INSTALACIÓN ELÉCTRICA",600000000,38220519,0),
-            ("Constitución","Santiago del Estero","SANITARIAS",600000000,68310219,0),
-            ("Constitución","Santiago del Estero","PRE-INSTALACIÓN AA",119500000,47800000,0),
-            ("Constitución","Santiago del Estero","HERRERÍA MOLDES BALCONES",6090000,6090000,0),
-            ("Constitución","Santiago del Estero","DURLOCK MO",200000000,2050000,0),
+            ("Constitución","Santiago del Estero","ALBAÑILERÍA",       1214627824, 592717300, 113850202),
+            ("Constitución","Santiago del Estero","INSTALACIÓN ELÉCTRICA", 600000000,  38220519,         0),
+            ("Constitución","Santiago del Estero","SANITARIAS",            600000000,  68310219,         0),
+            ("Constitución","Santiago del Estero","PRE-INSTALACIÓN AA",    119500000,  47800000,         0),
+            ("Constitución","Santiago del Estero","DURLOCK MO",            200000000,   2050000,         0),
         ]
+        res = []
         for r in nuevos_compra:
             conn.run("INSERT INTO contratos_compra (obra,bloque,descripcion,proveedor,presupuesto,pagado,cargas) VALUES (:o,:b,:d,:p,:pr,:pa,:c)",
                 o=r[0],b=r[1],d=r[2],p=r[3],pr=r[4],pa=r[5],c=r[6])
+            pendiente = r[4]-r[5]-r[6]
+            res.append(f"COMPRA {r[2]}: pagado ${r[5]:,.0f} | pendiente ${pendiente:,.0f}")
         for r in nuevos_venta:
             conn.run("INSERT INTO contratos_venta (obra,bloque,descripcion,presupuesto,cobrado,cobrado_cac) VALUES (:o,:b,:d,:pr,:c,:cac)",
                 o=r[0],b=r[1],d=r[2],pr=r[3],c=r[4],cac=r[5])
+            pendiente = r[3]-r[4]-r[5]
+            res.append(f"VENTA  {r[2]}: cobrado ${r[4]+r[5]:,.0f} | pendiente ${pendiente:,.0f}")
         conn.close()
-        return "✅ Contratos SDE actualizados correctamente con datos reales de Drive."
+        return "✅ Contratos SDE cargados:
+" + "
+".join(res)
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
