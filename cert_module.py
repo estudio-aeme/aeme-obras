@@ -171,11 +171,13 @@ def _duplicar_xlsx_con_nueva_hoja(xlsx_bytes, src_sheet_name, new_sheet_name,
             raise Exception(f"No encontré el archivo para rId={src_rid}")
         
         src_target = src_file_match.group(1)
-        # Normalizar path
+        # Normalizar path (puede ser relativo o absoluto)
         if src_target.startswith('/'):
-            src_path = src_target[1:]  # quitar el / inicial
+            src_path = src_target[1:]
+        elif src_target.startswith('xl/'):
+            src_path = src_target
         else:
-            src_path = f"xl/worksheets/{src_target}" if not src_target.startswith('xl/') else src_target
+            src_path = f"xl/{src_target}"
         
         print(f"Hoja fuente: {src_path}")
         
@@ -389,9 +391,12 @@ def certificar_durlock(mensaje, num_whatsapp=None):
                         src_match = re.search(rf'Target="([^"]+)"[^>]*Id="{src_rid}"', rels_xml)
                     if src_match:
                         src_target = src_match.group(1)
-                        src_path = src_target.lstrip('/')
-                        if not src_path.startswith('xl/'):
-                            src_path = f"xl/worksheets/{src_path}"
+                        if src_target.startswith('/'):
+                            src_path = src_target[1:]
+                        elif src_target.startswith('xl/'):
+                            src_path = src_target
+                        else:
+                            src_path = f"xl/{src_target}"
                         prev_xml = zf.read(src_path).decode('utf-8')
 
                         # Leer todos los J values
