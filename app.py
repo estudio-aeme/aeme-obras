@@ -322,7 +322,8 @@ INTENCIONES posibles:
 - "registrar_cobro": cobro del cliente. Extraé "monto", "contrato", "nota"
 - "registrar_cac": CAC cobrado al cliente. Extraé "monto", "contrato"
 - "registrar_desacopio": compra de materiales. Extraé "proveedor", "monto", "rubro", "factura", "nota"
-- "registrar_certificado": cert semanal. Extraé "fecha"(dd/mm/aaaa), "descripcion", "monto", "tipo"(compra/venta), "contrato", "incluye_cac", "monto_cac"
+- "registrar_certificado": cert semanal simple (solo monto). Extraé "fecha"(dd/mm/aaaa), "descripcion", "monto", "tipo"(compra/venta), "contrato", "incluye_cac", "monto_cac"
+- "certificar_contrato": el usuario quiere generar/actualizar un certificado con avances por piso/tarea. Extraé "contrato" (durlock/electricidad/sanitarias/pre_aa/herreria), "tipo" (interno/cliente), "mensaje_original" (el mensaje completo tal cual)
 - "confirmacion": el usuario confirma con "sí", "si", "dale", "confirmo", "ok"
 - "cancelacion": el usuario cancela con "no", "cancelar", "no registres"
 - "otro": cualquier otra cosa
@@ -442,6 +443,18 @@ def procesar_mensaje(remitente, mensaje):
         cac_str = f" + CAC ${monto_cac/1e6:.2f}M" if incluye_cac else ""
         return f"❓ Confirmás certificado *{desc}* del {fecha} por *{monto_fmt(monto)}*{cac_str} ({tipo_cert})?\n(Respondé *sí* para confirmar)"
 
+    # ── Certificar contrato (actualiza Drive) ────────────────────────────────
+    if intent == "certificar_contrato":
+        contrato = d.get("contrato","").lower()
+        tipo = d.get("tipo","interno").lower()
+        if "durlock" in contrato or "cielorraso" in contrato:
+            if CERT_MODULE_OK:
+                pendientes[remitente] = {"tipo": "certificar_durlock", "mensaje_original": mensaje}
+                return "❓ Confirmás que querés generar el *cert interno de Durlock* con estos avances?\n(Respondé *sí* para confirmar)"
+            else:
+                return "❌ Módulo de certificación no disponible."
+        return f"⚠️ Certificación automática de *{contrato}* próximamente. Por ahora usá el Excel directamente."
+
     # ── Otro ──────────────────────────────────────────────────────────────────
     return d.get("respuesta", "No entendí. Podés preguntarme:\n• *Cómo va la obra*\n• *Saldo electricidad*\n• *Pagué $5M albañilería*\n• *Cobré $8M sanitarias*\n• *Desacopio NOVA $3M materiales eléctricos*\n• *Cert albañilería N°72 $41M*")
 
@@ -497,3 +510,14 @@ def route_datos():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INTEGRACIÓN CON MÓDULO DE CERTIFICACIÓN
+# ─────────────────────────────────────────────────────────────────────────────
+try:
+    from cert_module import certificar_durlock
+    CERT_MODULE_OK = True
+except ImportError:
+    CERT_MODULE_OK = False
+    print("cert_module no disponible")
+
