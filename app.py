@@ -209,15 +209,15 @@ Cuando el usuario quiere registrar un pago o cobro sobre un contrato, extraé:
 
 Cuando el usuario pide listar contratos:
 - solo_pendientes: true si dice "activos", "vigentes", "con saldo", "pendientes", "abiertos", "en curso"
-- tipo: "compra" si dice compra/proveedores/pagos/interno. "venta" si dice venta/cliente/cobros
-- Si no especifica tipo, usá "compra"
+- tipo: "compra" si dice compra/proveedores/pagos/interno. "venta" si dice venta/cliente/cobros. Si no especifica, "compra"
+- bloque: "Santiago del Estero" si menciona SDE/Santiago/Santiago del Estero. "San José" si menciona San Jose/SJ. null si no especifica bloque
 
 Respondé SIEMPRE en JSON:
 {"intencion": "desacopio", "tipo": "pago_proveedor", "monto": 5000000, "contrato": "albañilería SDE", "es_cac": false}
 {"intencion": "desacopio", "tipo": "cobro_cliente", "monto": 3000000, "contrato": "hormigón", "es_cac": false}
 {"intencion": "consulta_contrato", "contrato": "albañilería SDE"}
-{"intencion": "listar_contratos", "tipo": "compra", "solo_pendientes": true}
-{"intencion": "listar_contratos", "tipo": "venta", "solo_pendientes": false}
+{"intencion": "listar_contratos", "tipo": "compra", "solo_pendientes": true, "bloque": "Santiago del Estero"}
+{"intencion": "listar_contratos", "tipo": "venta", "solo_pendientes": false, "bloque": null}
 {"intencion": "otro", "respuesta": "texto de respuesta directa"}
 
 Para consultas generales respondé con intencion "otro".
@@ -362,12 +362,25 @@ def procesar_mensaje(mensaje, remitente):
             tipo_lista = data.get("tipo", "compra")
             # Detectar si el usuario quiere solo con saldo pendiente
             solo_pendientes = data.get("solo_pendientes", False) or any(w in mensaje.lower() for w in ["activo","vigente","pendiente","saldo","abierto","en curso"])
+            # Filtro de bloque
+            bloque_filtro = data.get("bloque", None)
+            if not bloque_filtro:
+                # detectar del texto
+                msg_low = mensaje.lower()
+                if any(w in msg_low for w in ["sde","santiago del estero","santiago"]):
+                    bloque_filtro = "Santiago del Estero"
+                elif any(w in msg_low for w in ["san jose","san josé","sj"]):
+                    bloque_filtro = "San José"
             conn = get_db()
             if tipo_lista == "compra":
-                rows = conn.run("SELECT bloque, descripcion, proveedor, presupuesto, pagado FROM contratos_compra WHERE activo=TRUE ORDER BY bloque, id")
+                if bloque_filtro:
+                    rows = conn.run("SELECT bloque, descripcion, proveedor, presupuesto, pagado FROM contratos_compra WHERE activo=TRUE AND bloque=:b ORDER BY id", b=bloque_filtro)
+                else:
+                    rows = conn.run("SELECT bloque, descripcion, proveedor, presupuesto, pagado FROM contratos_compra WHERE activo=TRUE ORDER BY bloque, id")
                 conn.close()
+                titulo_bloque = f" — {bloque_filtro}" if bloque_filtro else ""
+                resp = "🔵 *CONTRATOS DE COMPRA" + titulo_bloque + (" CON SALDO*\n" if solo_pendientes else "*\n")
                 bloque_actual = ""
-                resp = "🔵 *CONTRATOS DE COMPRA" + (" CON SALDO*\n" if solo_pendientes else "*\n")
                 encontrados = 0
                 for row in rows:
                     bl, desc, prov, ppto, pagado = row
@@ -375,18 +388,22 @@ def procesar_mensaje(mensaje, remitente):
                     pct = (float(pagado)/float(ppto)*100) if float(ppto)>0 else 0
                     if solo_pendientes and pendiente <= 0:
                         continue
-                    if bl != bloque_actual:
+                    if not bloque_filtro and bl != bloque_actual:
                         resp += f"\n📍 *{bl}*\n"
                         bloque_actual = bl
-                    resp += f"  • {desc} ({prov[:15]})\n    Pagado: {pct:.0f}% | Pendiente: {fmt_ars(pendiente)}\n"
+                    resp += f"  • {desc} ({prov[:18]})\n    Pagado: {pct:.0f}% | Pendiente: {fmt_ars(pendiente)}\n"
                     encontrados += 1
                 if encontrados == 0:
                     resp += "\nNo hay contratos con saldo pendiente."
             else:
-                rows = conn.run("SELECT bloque, descripcion, presupuesto, cobrado, cobrado_cac FROM contratos_venta WHERE activo=TRUE ORDER BY bloque, id")
+                if bloque_filtro:
+                    rows = conn.run("SELECT bloque, descripcion, presupuesto, cobrado, cobrado_cac FROM contratos_venta WHERE activo=TRUE AND bloque=:b ORDER BY id", b=bloque_filtro)
+                else:
+                    rows = conn.run("SELECT bloque, descripcion, presupuesto, cobrado, cobrado_cac FROM contratos_venta WHERE activo=TRUE ORDER BY bloque, id")
                 conn.close()
+                titulo_bloque = f" — {bloque_filtro}" if bloque_filtro else ""
+                resp = "🟢 *CONTRATOS DE VENTA" + titulo_bloque + (" CON SALDO*\n" if solo_pendientes else "*\n")
                 bloque_actual = ""
-                resp = "🟢 *CONTRATOS DE VENTA" + (" CON SALDO*\n" if solo_pendientes else "*\n")
                 encontrados = 0
                 for row in rows:
                     bl, desc, ppto, cobrado, cob_cac = row
@@ -395,7 +412,7 @@ def procesar_mensaje(mensaje, remitente):
                     pct = (total/float(ppto)*100) if float(ppto)>0 else 0
                     if solo_pendientes and pendiente <= 0:
                         continue
-                    if bl != bloque_actual:
+                    if not bloque_filtro and bl != bloque_actual:
                         resp += f"\n📍 *{bl}*\n"
                         bloque_actual = bl
                     resp += f"  • {desc}\n    Cobrado: {pct:.0f}% | Pendiente: {fmt_ars(pendiente)}\n"
