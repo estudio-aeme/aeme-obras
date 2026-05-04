@@ -1,17 +1,13 @@
 """
 cert_module.py — Módulo de certificación ObraManager
-Estrategia: copia el último cert y solo modifica los valores editables.
-Así preserva 100% el formato, fórmulas y estructura original.
+Estrategia: duplica el XML de la hoja anterior directamente en el ZIP del xlsx.
+Preserva 100% el formato, fórmulas y estilos originales.
 """
-import os, io, json, copy, requests, tempfile, subprocess
+import os, io, json, zipfile, re, requests
 from datetime import datetime
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
-import importlib.util
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
-# ─── IDs Drive ────────────────────────────────────────────────────────────────
 DRIVE = {
     "durlock":      {"xlsx": "1oU_5BEzovYxkzkspgF3_NJvr_H71QXO8", "folder": "1S7jMjkeILwL2CqG7GasEL8ksLRc7pu0F"},
     "electricidad": {"xlsx": "1_3nTIIu1FsCHYH9FG3vznip97GpPVy6w", "folder": "1CFSIvx02W95erSUJAtrOPYxHwkvZxX2E"},
@@ -20,8 +16,8 @@ DRIVE = {
     "herreria":     {"xlsx": "1ZV5Q9pQLnudPk8wA04uqD6qhVODOYO-4", "folder": "1Tj20i2ry813fsWx3anDbV0afRgS0mQu5"},
 }
 
-# Mapa fijo: piso -> fila en la hoja de cert (basado en estructura real del xlsx)
-DURLOCK_ROW_MAP = {
+# Mapa fijo de filas por piso/tarea (estructura real del xlsx de Durlock)
+DURLOCK_ROWS = {
     "PLANTA BAJA": {"Armado de estructura según plano": 11, "Emplacado general": 12, "Masillado e iluminacion": 13},
     "PISO 1°":     {"Armado de estructura según plano": 15, "Emplacado general": 16, "Masillado e iluminacion": 17},
     "PISO 2°":     {"Armado de estructura según plano": 19, "Emplacado general": 20, "Masillado e iluminacion": 21},
@@ -38,21 +34,13 @@ DURLOCK_ROW_MAP = {
     "PISO 13°":    {"Armado de estructura según plano": 63, "Emplacado general": 64, "Masillado e iluminacion": 65},
     "PISO 14°":    {"Armado de estructura según plano": 67, "Emplacado general": 68, "Masillado e iluminacion": 69},
 }
-# Alias para normalizar nombres de piso
+
 PISO_ALIAS = {
-    "PLANTA BAJA (LOSA EXISTENTE)": "PLANTA BAJA",
-    "PLANTA BAJA": "PLANTA BAJA",
+    "PLANTA BAJA (LOSA EXISTENTE)": "PLANTA BAJA", "PLANTA BAJA": "PLANTA BAJA",
 }
 for i in range(1, 15):
     PISO_ALIAS[f"PISO {i}°"] = f"PISO {i}°"
     PISO_ALIAS[f"PISO {i}"] = f"PISO {i}°"
-
-# Columnas en la hoja de cert
-COL_H = 8   # % ANTERIOR (traer del acumulado anterior)
-COL_I = 9   # % ACTUAL (fórmula =J-H, no editar)
-COL_J = 10  # % ACUMULADO (editar: anterior + actual)
-COL_M1 = 13 # Número de certificado
-COL_M2 = 13 # Fecha
 
 
 def _token():
@@ -62,212 +50,410 @@ def _token():
     from google.oauth2 import service_account
     from google.auth.transport.requests import Request
     creds = service_account.Credentials.from_service_account_info(
-        json.loads(sa_json),
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
+        json.loads(sa_json), scopes=["https://www.googleapis.com/auth/drive"])
     creds.refresh(Request())
     return creds.token
 
 
 def _download(file_id):
-    r = requests.get(
-        f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
-        headers={"Authorization": f"Bearer {_token()}"}
-    )
+    r = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
+                     headers={"Authorization": f"Bearer {_token()}"})
     r.raise_for_status()
     return r.content
 
 
-def _update(file_id, content_bytes, mime_type):
+def _update_drive(file_id, data, mime):
     r = requests.patch(
         f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=media",
-        headers={"Authorization": f"Bearer {_token()}", "Content-Type": mime_type},
-        data=content_bytes
-    )
+        headers={"Authorization": f"Bearer {_token()}", "Content-Type": mime}, data=data)
     r.raise_for_status()
     return r.json()
 
 
-def _upload_new(folder_id, filename, content_bytes, mime_type):
+def _upload_new(folder_id, name, data, mime):
     token = _token()
-    metadata = {"name": filename, "parents": [folder_id]}
     r = requests.post(
         "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
         headers={"Authorization": f"Bearer {token}"},
-        files={
-            "metadata": (None, json.dumps(metadata), "application/json"),
-            "file": (filename, content_bytes, mime_type),
-        }
-    )
+        files={"metadata": (None, json.dumps({"name": name, "parents": [folder_id]}), "application/json"),
+               "file": (name, data, mime)})
     r.raise_for_status()
     return r.json().get("id")
 
 
-def _parse_avances(mensaje, contrato):
-    system = f"""Parsea certificados de construcción para {contrato}.
-Respondé SOLO JSON válido sin texto extra:
-{{
-  "fecha": "dd/mm/aaaa o null",
-  "avances": {{
-    "PISO 8°": {{"Armado de estructura según plano": 10}},
-    "PISO 9°": {{"Armado de estructura según plano": 10}}
-  }}
-}}
-Pisos válidos: PLANTA BAJA, PISO 1° a PISO 14°
-Tareas: "Armado de estructura según plano", "Emplacado general", "Masillado e iluminacion"
-Los % son el avance ACTUAL del certificado (no el acumulado).
-Si dice solo "estructura" se refiere a "Armado de estructura según plano"."""
+def _excel_serial(dt):
+    """Convierte datetime a número serial de Excel."""
+    from datetime import date
+    base = date(1899, 12, 30)
+    return (dt.date() - base).days
 
-    headers = {"Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"}
-    body = {"model": "claude-haiku-4-5-20251001", "max_tokens": 500, "system": system,
-            "messages": [{"role": "user", "content": mensaje}]}
+
+def _set_cell_value(row_xml, col_letter, new_value):
+    """Reemplaza el valor de una celda específica en el XML de la fila."""
+    cell_ref = f"{col_letter}{re.search(r'r=\"(\\d+)\"', row_xml).group(1)}"
+    # Patrón para la celda con valor
+    pattern = rf'(<c r="{cell_ref}"[^>]*>)(?:<f>[^<]*</f>)?(<v>[^<]*</v>|<v/>)'
+    replacement = rf'\g<1><v>{new_value}</v>'
+    return re.sub(pattern, replacement, row_xml)
+
+
+def _get_cell_value(row_xml, col_letter, row_num):
+    """Obtiene el valor de una celda del XML."""
+    cell_ref = f"{col_letter}{row_num}"
+    m = re.search(rf'<c r="{cell_ref}"[^>]*>(?:<f>[^<]*</f>)?<v>([^<]*)</v>', row_xml)
+    return float(m.group(1)) if m else 0.0
+
+
+def _modify_sheet_xml(sheet_xml, num_cert, fecha_serial, avances_por_fila):
+    """
+    Modifica el XML de la hoja duplicada:
+    - M1: número de cert
+    - M2: fecha
+    - Para cada fila: H = nuevo anterior, J = nuevo acumulado
+    """
+    lines = sheet_xml
+
+    # Reemplazar M1 (número cert)
+    lines = re.sub(
+        r'(<c r="M1"[^>]*>)(?:<f>[^<]*</f>)?<v>[^<]*</v>',
+        rf'\g<1><v>{num_cert}</v>', lines)
+
+    # Reemplazar M2 (fecha)
+    lines = re.sub(
+        r'(<c r="M2"[^>]*>)(?:<f>[^<]*</f>)?<v>[^<]*</v>',
+        rf'\g<1><v>{fecha_serial}</v>', lines)
+
+    # Reemplazar valores H y J por cada fila
+    for row_num, (nuevo_h, nuevo_j) in avances_por_fila.items():
+        # Col H
+        lines = re.sub(
+            rf'(<c r="H{row_num}"[^>]*>)(?:<f>[^<]*</f>)?<v>[^<]*</v>',
+            rf'\g<1><v>{nuevo_h}</v>', lines)
+        # Col J
+        lines = re.sub(
+            rf'(<c r="J{row_num}"[^>]*>)(?:<f>[^<]*</f>)?<v>[^<]*</v>',
+            rf'\g<1><v>{nuevo_j}</v>', lines)
+
+    return lines
+
+
+def _duplicar_xlsx_con_nueva_hoja(xlsx_bytes, src_sheet_name, new_sheet_name,
+                                   num_cert, fecha_serial, avances_por_fila):
+    """
+    Duplica el xlsx añadiendo una nueva hoja copiada del sheet anterior,
+    modificando solo los valores editables. Retorna el nuevo xlsx como bytes.
+    """
+    with zipfile.ZipFile(io.BytesIO(xlsx_bytes), 'r') as zin:
+        all_files = zin.namelist()
+        
+        # Leer workbook.xml para mapear sheet name → archivo
+        wb_xml = zin.read('xl/workbook.xml').decode('utf-8')
+        rels_xml = zin.read('xl/_rels/workbook.xml.rels').decode('utf-8')
+        
+        # Encontrar el rId y archivo de la hoja fuente
+        # Encontrar todos los sheets en workbook.xml
+        sheets_in_wb = re.findall(r'<sheet name="([^"]+)"[^/]*r:id="([^"]+)"', wb_xml)
+        src_rid = None
+        for sname, rid in sheets_in_wb:
+            if sname == src_sheet_name:
+                src_rid = rid
+                break
+        
+        if not src_rid:
+            raise Exception(f"No encontré la hoja '{src_sheet_name}'")
+        
+        # Encontrar el archivo de la hoja fuente
+        src_file_match = re.search(rf'Id="{src_rid}"[^/]*Target="([^"]+)"', rels_xml)
+        if not src_file_match:
+            raise Exception(f"No encontré el archivo para rId={src_rid}")
+        
+        src_target = src_file_match.group(1)
+        # Normalizar path
+        if src_target.startswith('/'):
+            src_path = src_target[1:]  # quitar el / inicial
+        else:
+            src_path = f"xl/worksheets/{src_target}" if not src_target.startswith('xl/') else src_target
+        
+        print(f"Hoja fuente: {src_path}")
+        
+        # Leer el XML de la hoja fuente
+        src_xml = zin.read(src_path).decode('utf-8')
+        
+        # Modificar el XML con los nuevos valores
+        new_xml = _modify_sheet_xml(src_xml, num_cert, fecha_serial, avances_por_fila)
+        
+        # Determinar el próximo número de hoja
+        existing_sheet_nums = [int(re.search(r'sheet(\d+)\.xml', f).group(1))
+                               for f in all_files if re.match(r'xl/worksheets/sheet\d+\.xml', f)]
+        next_num = max(existing_sheet_nums) + 1
+        new_file = f"xl/worksheets/sheet{next_num}.xml"
+        new_rid = f"rId{next_num + 10}"  # rId único
+        
+        # Construir nuevo ZIP
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in all_files:
+                data = zin.read(item)
+                
+                if item == 'xl/workbook.xml':
+                    # Agregar la nueva hoja antes de </sheets>
+                    decoded = data.decode('utf-8')
+                    new_sheet_entry = f'<sheet name="{new_sheet_name}" sheetId="{next_num}" r:id="{new_rid}"/>'
+                    decoded = decoded.replace('</sheets>', f'{new_sheet_entry}</sheets>')
+                    data = decoded.encode('utf-8')
+                
+                elif item == 'xl/_rels/workbook.xml.rels':
+                    decoded = data.decode('utf-8')
+                    new_rel = f'<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet{next_num}.xml" Id="{new_rid}"/>'
+                    decoded = decoded.replace('</Relationships>', f'{new_rel}</Relationships>')
+                    data = decoded.encode('utf-8')
+                
+                elif item == '[Content_Types].xml':
+                    decoded = data.decode('utf-8')
+                    new_ct = f'<Override PartName="/xl/worksheets/sheet{next_num}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    decoded = decoded.replace('</Types>', f'{new_ct}</Types>')
+                    data = decoded.encode('utf-8')
+                
+                zout.writestr(item, data)
+            
+            # Agregar la nueva hoja
+            zout.writestr(new_file, new_xml.encode('utf-8'))
+        
+        return out.getvalue()
+
+
+def _parse_avances(mensaje):
+    system = """Parsea certificados de Durlock MO para Santiago del Estero.
+Respondé SOLO JSON válido sin texto extra:
+{"fecha": "dd/mm/aaaa o null", "avances": {"PISO 8°": {"Armado de estructura según plano": 10}, "PISO 9°": {"Armado de estructura según plano": 10}}}
+Pisos: PLANTA BAJA, PISO 1° a PISO 14°
+Tareas: "Armado de estructura según plano", "Emplacado general", "Masillado e iluminacion"
+% = avance ACTUAL del certificado (no acumulado).
+"estructura" = "Armado de estructura según plano"."""
+
+    headers = {"Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY,
+               "anthropic-version": "2023-06-01"}
+    body = {"model": "claude-haiku-4-5-20251001", "max_tokens": 500,
+            "system": system, "messages": [{"role": "user", "content": mensaje}]}
     r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
-    import re
     text = r.json()["content"][0]["text"].strip()
     text = re.sub(r"^```json|^```|```$", "", text, flags=re.MULTILINE).strip()
     return json.loads(text)
 
 
-def _copiar_hoja(wb, src_name, dst_name):
-    """Copia una hoja preservando todo el contenido y formato."""
-    from copy import copy
-    src = wb[src_name]
-    dst = wb.copy_worksheet(src)
-    dst.title = dst_name
-    return dst
+def _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert):
+    """Genera PDF con reportlab o fpdf2."""
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm,
+                                leftMargin=2*cm, rightMargin=2*cm)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Header
+        h1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=16, alignment=TA_CENTER, spaceAfter=4)
+        h2 = ParagraphStyle('h2', parent=styles['Normal'], fontSize=11, alignment=TA_CENTER, spaceAfter=12)
+        story.append(Paragraph(f"CERTIFICADO N°{num_cert}", h1))
+        story.append(Paragraph(f"Durlock MO — Constitución, Santiago del Estero", h2))
+        story.append(Paragraph(f"Fecha: {fecha_dt.strftime('%d/%m/%Y')}", h2))
+        story.append(Spacer(1, 0.5*cm))
+
+        # Tabla de avances
+        data = [["PISO / TAREA", "% ACTUAL"]]
+        for linea in lineas_avance:
+            linea = linea.strip().lstrip('•').strip()
+            parts = linea.rsplit(":", 1)
+            if len(parts) == 2:
+                data.append([parts[0].strip(), parts[1].strip()])
+
+        t = Table(data, colWidths=[13*cm, 3*cm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F2D3D')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F7F7F7')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (0, -1), 8),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.5*cm))
+
+        # Monto
+        total_s = ParagraphStyle('total', parent=styles['Normal'], fontSize=12, spaceAfter=4)
+        story.append(Paragraph(f"<b>Monto certificado estimado:</b>  ${monto_cert:,.0f}", total_s))
+        story.append(Spacer(1, 2*cm))
+
+        # Firmas
+        firma_data = [["_________________________", "_________________________"],
+                      ["Dirección de Obra", "Contratista — Julio Cabrera"]]
+        ft = Table(firma_data, colWidths=[8*cm, 8*cm])
+        ft.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                ('FONTSIZE', (0, 0), (-1, -1), 10),
+                                ('TOPPADDING', (0, 0), (-1, -1), 4)]))
+        story.append(ft)
+
+        doc.build(story)
+        return buf.getvalue()
+
+    except Exception as e:
+        print(f"PDF error: {e}")
+        try:
+            from fpdf import FPDF
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Helvetica", "B", 16)
+            pdf.cell(0, 10, f"CERTIFICADO N{chr(176)}{num_cert} - DURLOCK MO", ln=True, align="C")
+            pdf.set_font("Helvetica", "", 11)
+            pdf.cell(0, 8, f"Santiago del Estero  |  {fecha_dt.strftime('%d/%m/%Y')}", ln=True, align="C")
+            pdf.ln(5)
+            for linea in lineas_avance:
+                pdf.cell(0, 7, linea.encode('latin-1', 'replace').decode('latin-1'), ln=True)
+            pdf.ln(5)
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.cell(0, 8, f"Monto certificado: ${monto_cert:,.0f}", ln=True)
+            return bytes(pdf.output())
+        except Exception as e2:
+            print(f"PDF fpdf2 error: {e2}")
+            return None
 
 
 def certificar_durlock(mensaje, num_whatsapp=None):
     try:
-        # 1. Parsear avances con IA
-        parsed = _parse_avances(mensaje, "Durlock MO")
+        # 1. Parsear avances
+        parsed = _parse_avances(mensaje)
         avances_raw = parsed.get("avances", {})
         fecha_str = parsed.get("fecha") or datetime.now().strftime("%d/%m/%Y")
 
         if not avances_raw:
             return "❌ No identifiqué avances. Ejemplo: 'piso 8 estructura 10%, piso 9 estructura 10%'", False
 
-        # Normalizar nombres de piso
+        # Normalizar pisos
         avances = {}
         for piso_raw, tareas in avances_raw.items():
             piso_norm = PISO_ALIAS.get(piso_raw.strip(), piso_raw.strip())
             avances[piso_norm] = tareas
 
-        # 2. Descargar xlsx
-        xlsx_bytes = _download(DRIVE["durlock"]["xlsx"])
-        wb = load_workbook(io.BytesIO(xlsx_bytes))
-
-        # Determinar número de cert
-        cert_sheets = [s for s in wb.sheetnames if s.startswith("CERT N°")]
-        cert_nums = []
-        for s in cert_sheets:
-            try: cert_nums.append(int(s.replace("CERT N°", "")))
-            except: pass
-        num_cert = max(cert_nums) + 1 if cert_nums else 1
-        ultimo_cert = f"CERT N°{max(cert_nums)}" if cert_nums else None
-
-        # 3. Copiar última hoja de cert como base
-        if ultimo_cert and ultimo_cert in wb.sheetnames:
-            nueva_hoja = wb.copy_worksheet(wb[ultimo_cert])
-            nueva_hoja.title = f"CERT N°{num_cert}"
-        else:
-            nueva_hoja = wb.create_sheet(f"CERT N°{num_cert}")
-
-        ws = nueva_hoja
-
-        # 4. Actualizar número y fecha
-        ws.cell(1, COL_M1).value = num_cert
         try:
             fecha_dt = datetime.strptime(fecha_str, "%d/%m/%Y")
         except:
             fecha_dt = datetime.now()
-        ws.cell(2, COL_M2).value = fecha_dt
+        fecha_serial = _excel_serial(fecha_dt)
 
-        # 5. Para cada piso/tarea: actualizar H (anterior) y J (acumulado)
-        monto_cert = 0
+        # 2. Descargar xlsx
+        xlsx_bytes = _download(DRIVE["durlock"]["xlsx"])
+
+        # 3. Detectar última hoja de cert para copiar
+        with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as zf:
+            wb_xml = zf.read('xl/workbook.xml').decode('utf-8')
+            rels_xml = zf.read('xl/_rels/workbook.xml.rels').decode('utf-8')
+
+        cert_sheets = re.findall(r'<sheet name="(CERT N°(\d+))"', wb_xml)
+        if cert_sheets:
+            cert_nums_found = [(name, int(n)) for name, n in cert_sheets]
+            cert_nums_found.sort(key=lambda x: x[1])
+            last_cert_name, last_cert_num = cert_nums_found[-1]
+            num_cert = last_cert_num + 1
+        else:
+            last_cert_name = None
+            num_cert = 1
+
+        new_sheet_name = f"CERT N°{num_cert}"
+        print(f"Generando {new_sheet_name} basado en {last_cert_name}")
+
+        # 4. Leer acumulados del cert anterior para calcular nuevos
+        # Necesitamos leer los J values del último cert para saber el anterior
+        prev_j_values = {}
+        if last_cert_name:
+            with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as zf:
+                # Encontrar el archivo del último cert
+                sheets_in_wb = re.findall(r'<sheet name="([^"]+)"[^/]*r:id="([^"]+)"', wb_xml)
+                src_rid = next((rid for name, rid in sheets_in_wb if name == last_cert_name), None)
+                if src_rid:
+                    src_match = re.search(rf'Id="{src_rid}"[^/]*Target="([^"]+)"', rels_xml)
+                    if src_match:
+                        src_target = src_match.group(1)
+                        src_path = src_target.lstrip('/')
+                        if not src_path.startswith('xl/'):
+                            src_path = f"xl/worksheets/{src_path}"
+                        prev_xml = zf.read(src_path).decode('utf-8')
+
+                        # Leer todos los J values
+                        for piso, tareas_map in DURLOCK_ROWS.items():
+                            for tarea, row_num in tareas_map.items():
+                                j_match = re.search(
+                                    rf'<c r="J{row_num}"[^>]*>(?:<f>[^<]*</f>)?<v>([^<]*)</v>',
+                                    prev_xml)
+                                if j_match:
+                                    prev_j_values[row_num] = float(j_match.group(1))
+
+        # 5. Construir mapa de cambios: {row_num: (nuevo_H, nuevo_J)}
+        avances_por_fila = {}
         lineas_avance = []
+        monto_cert_est = 0
 
         for piso, tareas in avances.items():
-            if piso not in DURLOCK_ROW_MAP:
+            if piso not in DURLOCK_ROWS:
                 continue
             for tarea_raw, pct_act in tareas.items():
-                # Buscar la tarea exacta
-                tarea_key = None
-                for t in DURLOCK_ROW_MAP[piso]:
-                    if tarea_raw.lower() in t.lower() or t.lower() in tarea_raw.lower():
-                        tarea_key = t
-                        break
+                tarea_key = next((t for t in DURLOCK_ROWS[piso]
+                                  if tarea_raw.lower() in t.lower() or t.lower() in tarea_raw.lower()), None)
                 if not tarea_key:
                     continue
 
-                row = DURLOCK_ROW_MAP[piso][tarea_key]
+                row_num = DURLOCK_ROWS[piso][tarea_key]
                 pct_act_dec = pct_act / 100.0
-
-                # Leer el acumulado anterior (J del cert anterior)
-                pct_ant = 0.0
-                if ultimo_cert and ultimo_cert in wb.sheetnames:
-                    prev_ws = wb[ultimo_cert]
-                    j_val = prev_ws.cell(row, COL_J).value
-                    if isinstance(j_val, (int, float)):
-                        pct_ant = float(j_val)
-
-                pct_acum = min(1.0, pct_ant + pct_act_dec)
-
-                # Actualizar: H = anterior, J = nuevo acumulado
-                ws.cell(row, COL_H).value = pct_ant
-                ws.cell(row, COL_J).value = pct_acum
-
-                # El % actual (col I) es fórmula =J-H, no tocar
-                # Pero calculamos el importe para el resumen
-                f_val = ws.cell(row, 6).value  # col F = valor total
-                if isinstance(f_val, (int, float)) and f_val:
-                    imp_act = round(f_val * pct_act_dec)
-                    monto_cert += imp_act
+                nuevo_h = prev_j_values.get(row_num, 0.0)
+                nuevo_j = min(1.0, nuevo_h + pct_act_dec)
+                avances_por_fila[row_num] = (nuevo_h, nuevo_j)
 
                 tarea_corta = tarea_key.replace("según plano", "").replace("e iluminacion", "").strip()
                 lineas_avance.append(f"  • {piso} — {tarea_corta}: {pct_act}%")
 
-        # 6. Resetear todos los demás % actuales a 0
-        # (poner J = H para pisos no mencionados → actual queda 0)
-        for piso, tareas_map in DURLOCK_ROW_MAP.items():
-            if piso in avances:
-                continue  # ya lo procesamos
-            for tarea, row in tareas_map.items():
-                # Si no se certificó este piso/tarea, el acumulado queda igual que el anterior
-                pct_ant = 0.0
-                if ultimo_cert and ultimo_cert in wb.sheetnames:
-                    prev_ws = wb[ultimo_cert]
-                    j_val = prev_ws.cell(row, COL_J).value
-                    if isinstance(j_val, (int, float)):
-                        pct_ant = float(j_val)
-                ws.cell(row, COL_H).value = pct_ant
-                ws.cell(row, COL_J).value = pct_ant  # acumulado = anterior (sin avance nuevo)
+        # Para pisos NO mencionados: H = J = acumulado anterior (sin avance nuevo)
+        for piso, tareas_map in DURLOCK_ROWS.items():
+            for tarea, row_num in tareas_map.items():
+                if row_num not in avances_por_fila:
+                    prev_j = prev_j_values.get(row_num, 0.0)
+                    avances_por_fila[row_num] = (prev_j, prev_j)
 
-        # 7. Guardar xlsx
-        out = io.BytesIO()
-        wb.save(out)
-        xlsx_nuevo = out.getvalue()
+        # 6. Duplicar xlsx con nueva hoja
+        xlsx_nuevo = _duplicar_xlsx_con_nueva_hoja(
+            xlsx_bytes, last_cert_name, new_sheet_name,
+            num_cert, fecha_serial, avances_por_fila
+        )
 
-        # 8. Subir xlsx al Drive
-        _update(DRIVE["durlock"]["xlsx"], xlsx_nuevo,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        # 7. Subir xlsx al Drive
+        _update_drive(DRIVE["durlock"]["xlsx"], xlsx_nuevo,
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # 9. Generar PDF con WeasyPrint o reportlab como fallback
-        pdf_bytes = _generar_pdf_cert(ws, num_cert, fecha_dt, avances, monto_cert)
-        pdf_url = None
-        if pdf_bytes:
-            pdf_nombre = f"Cs_SDE_DURLOCK_CERT_N{num_cert}_{fecha_dt.strftime('%Y%m%d')}.pdf"
-            file_id = _upload_new(DRIVE["durlock"]["folder"], pdf_nombre, pdf_bytes, "application/pdf")
-            if file_id:
-                pdf_url = f"https://drive.google.com/file/d/{file_id}/view"
+        # 8. Generar y subir PDF
+        pdf_str = ""
+        try:
+            pdf_bytes = _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert_est)
+            if pdf_bytes:
+                pdf_nombre = f"Cs_SDE_DURLOCK_CERT_N{num_cert}_{fecha_dt.strftime('%Y%m%d')}.pdf"
+                fid = _upload_new(DRIVE["durlock"]["folder"], pdf_nombre, pdf_bytes, "application/pdf")
+                if fid:
+                    pdf_str = f"\n📎 PDF: https://drive.google.com/file/d/{fid}/view"
+        except Exception as pe:
+            print(f"PDF skip: {pe}")
 
-        # 10. Respuesta
-        pdf_str = f"\n📎 PDF: {pdf_url}" if pdf_url else "\n📎 PDF: no disponible en este entorno"
+        # 9. Respuesta
         respuesta = (
-            f"✅ *CERT N°{num_cert} — Durlock interno*\n"
+            f"✅ *{new_sheet_name} — Durlock interno*\n"
             f"📅 {fecha_dt.strftime('%d/%m/%Y')}\n\n"
             f"*Avances:*\n" + "\n".join(lineas_avance) + "\n\n"
-            f"💵 Monto cert est.: *${monto_cert:,.0f}*\n"
             f"📊 Excel actualizado en Drive"
             + pdf_str
         )
@@ -277,120 +463,3 @@ def certificar_durlock(mensaje, num_whatsapp=None):
         import traceback
         print(f"CERT ERROR: {traceback.format_exc()}")
         return f"❌ Error: {str(e)}", False
-
-
-def _generar_pdf_cert(ws, num_cert, fecha_dt, avances, monto_cert):
-    """Genera un PDF limpio del certificado usando reportlab."""
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib import colors
-        from reportlab.lib.units import cm
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.enums import TA_CENTER, TA_LEFT
-
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm,
-                                leftMargin=1.5*cm, rightMargin=1.5*cm)
-        styles = getSampleStyleSheet()
-        story = []
-
-        # Título
-        title_style = ParagraphStyle('title', parent=styles['Heading1'], fontSize=14,
-                                     alignment=TA_CENTER, spaceAfter=6)
-        story.append(Paragraph(f"CERTIFICADO N°{num_cert} — DURLOCK MO", title_style))
-        story.append(Paragraph(f"Constitución — Santiago del Estero  |  {fecha_dt.strftime('%d/%m/%Y')}", 
-                               ParagraphStyle('sub', parent=styles['Normal'], fontSize=10, alignment=TA_CENTER)))
-        story.append(Spacer(1, 0.4*cm))
-
-        # Tabla de avances
-        headers = ["PISO / TAREA", "ANT. %", "ACT. %", "ACUM. %", "IMPORTE ACT."]
-        data = [headers]
-
-        for piso, tareas_map in DURLOCK_ROW_MAP.items():
-            piso_added = False
-            for tarea, row in tareas_map.items():
-                h_val = ws.cell(row, COL_H).value or 0
-                j_val = ws.cell(row, COL_J).value or 0
-                i_val = j_val - h_val  # actual = acumulado - anterior
-                f_val = ws.cell(row, 6).value or 0
-                imp_act = f_val * i_val if isinstance(f_val, (int, float)) else 0
-
-                # Solo mostrar filas con algún valor
-                if h_val == 0 and j_val == 0:
-                    continue
-
-                piso_label = piso if not piso_added else ""
-                piso_added = True
-                tarea_corta = tarea.replace("según plano", "").replace("e iluminacion", "").strip()
-                data.append([
-                    f"{piso_label}\n{tarea_corta}" if piso_label else tarea_corta,
-                    f"{h_val*100:.1f}%",
-                    f"{i_val*100:.1f}%",
-                    f"{j_val*100:.1f}%",
-                    f"${imp_act:,.0f}" if imp_act else "-"
-                ])
-
-        if len(data) > 1:
-            col_widths = [7*cm, 2*cm, 2*cm, 2*cm, 3.5*cm]
-            t = Table(data, colWidths=col_widths, repeatRows=1)
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1F2D3D')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0,0), (-1,-1), 9),
-                ('ALIGN', (1,0), (-1,-1), 'CENTER'),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#CCCCCC')),
-                ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#F5F5F5')]),
-                ('TOPPADDING', (0,0), (-1,-1), 3),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-            ]))
-            story.append(t)
-
-        story.append(Spacer(1, 0.5*cm))
-
-        # Totales
-        total_style = ParagraphStyle('total', parent=styles['Normal'], fontSize=11, spaceAfter=4)
-        story.append(Paragraph(f"<b>Monto certificado:</b>  ${monto_cert:,.0f}", total_style))
-
-        # Firmas
-        story.append(Spacer(1, 2*cm))
-        firma_data = [["_________________________", "_________________________"],
-                      ["Dirección de Obra", "Contratista"]]
-        ft = Table(firma_data, colWidths=[8*cm, 8*cm])
-        ft.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('FONTSIZE', (0,0), (-1,-1), 10)]))
-        story.append(ft)
-
-        doc.build(story)
-        return buf.getvalue()
-
-    except ImportError:
-        print("reportlab no disponible, intentando con fpdf2")
-        return _generar_pdf_fpdf(num_cert, fecha_dt, avances, monto_cert)
-    except Exception as e:
-        print(f"PDF reportlab error: {e}")
-        return None
-
-
-def _generar_pdf_fpdf(num_cert, fecha_dt, avances, monto_cert):
-    """Fallback PDF con fpdf2."""
-    try:
-        from fpdf import FPDF
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 16)
-        pdf.cell(0, 10, f"CERTIFICADO N\xb0{num_cert} - DURLOCK MO", ln=True, align="C")
-        pdf.set_font("Helvetica", "", 11)
-        pdf.cell(0, 8, f"Santiago del Estero  |  {fecha_dt.strftime('%d/%m/%Y')}", ln=True, align="C")
-        pdf.ln(5)
-        for piso, tareas in avances.items():
-            for tarea, pct in tareas.items():
-                tarea_c = tarea.replace("según plano","").replace("e iluminacion","").strip()
-                pdf.cell(0, 7, f"{piso} - {tarea_c}: {pct}%", ln=True)
-        pdf.ln(5)
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(0, 8, f"Monto certificado: ${monto_cert:,.0f}", ln=True)
-        return bytes(pdf.output())
-    except Exception as e:
-        print(f"PDF fpdf2 error: {e}")
-        return None
