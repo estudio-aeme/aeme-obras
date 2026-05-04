@@ -506,6 +506,40 @@ def ver_contratos():
     except Exception as e:
         return jsonify({"error": str(e)})
 
+
+@app.route("/reset-sde")
+def reset_sde():
+    try:
+        conn = get_db()
+        conn.run("DELETE FROM contratos_compra WHERE bloque='Santiago del Estero'")
+        conn.run("DELETE FROM contratos_venta WHERE bloque='Santiago del Estero'")
+        nuevos_compra = [
+            ("Constitución","Santiago del Estero","ALBAÑILERÍA","Joel Benitez",430000000,286232463,75878237),
+            ("Constitución","Santiago del Estero","INSTALACIÓN ELÉCTRICA","Pablo Fidi",600000000,38220519,0),
+            ("Constitución","Santiago del Estero","SANITARIAS","Ricardo Sequeira",600000000,68310219,0),
+            ("Constitución","Santiago del Estero","PRE-INSTALACIÓN AA","Ricardo Sequeira",119500000,47800000,0),
+            ("Constitución","Santiago del Estero","HERRERÍA MOLDES BALCONES","Leo Gallardo",6090000,6090000,0),
+            ("Constitución","Santiago del Estero","DURLOCK MO","Salazar",200000000,2050000,0),
+        ]
+        nuevos_venta = [
+            ("Constitución","Santiago del Estero","ALBAÑILERÍA",1214627824,592717300,113850202),
+            ("Constitución","Santiago del Estero","INSTALACIÓN ELÉCTRICA",600000000,38220519,0),
+            ("Constitución","Santiago del Estero","SANITARIAS",600000000,68310219,0),
+            ("Constitución","Santiago del Estero","PRE-INSTALACIÓN AA",119500000,47800000,0),
+            ("Constitución","Santiago del Estero","HERRERÍA MOLDES BALCONES",6090000,6090000,0),
+            ("Constitución","Santiago del Estero","DURLOCK MO",200000000,2050000,0),
+        ]
+        for r in nuevos_compra:
+            conn.run("INSERT INTO contratos_compra (obra,bloque,descripcion,proveedor,presupuesto,pagado,cargas) VALUES (:o,:b,:d,:p,:pr,:pa,:c)",
+                o=r[0],b=r[1],d=r[2],p=r[3],pr=r[4],pa=r[5],c=r[6])
+        for r in nuevos_venta:
+            conn.run("INSERT INTO contratos_venta (obra,bloque,descripcion,presupuesto,cobrado,cobrado_cac) VALUES (:o,:b,:d,:pr,:c,:cac)",
+                o=r[0],b=r[1],d=r[2],pr=r[3],c=r[4],cac=r[5])
+        conn.close()
+        return "✅ Contratos SDE actualizados correctamente con datos reales de Drive."
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
 # Inicializar
 try:
     init_db()
