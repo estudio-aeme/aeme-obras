@@ -202,20 +202,25 @@ SYSTEM_PROMPT = """Sos el asistente de ObraManager para la constructora Aeme Obr
 Manejás contratos de COMPRA (pagos a proveedores) y VENTA (cobros del cliente).
 
 Cuando el usuario quiere registrar un pago o cobro sobre un contrato, extraé:
-- tipo: "pago_proveedor" o "cobro_cliente"  
+- tipo: "pago_proveedor" o "cobro_cliente"
 - monto: número
-- contrato: palabras clave del contrato (ej: "albañilería SDE", "hormigón Santiago", "sanitaria San José")
+- contrato: palabras clave del contrato
 - es_cac: true si menciona CAC/ajuste/índice
 
-Respondé SIEMPRE en JSON así:
+Cuando el usuario pide listar contratos:
+- solo_pendientes: true si dice "activos", "vigentes", "con saldo", "pendientes", "abiertos", "en curso"
+- tipo: "compra" si dice compra/proveedores/pagos/interno. "venta" si dice venta/cliente/cobros
+- Si no especifica tipo, usá "compra"
+
+Respondé SIEMPRE en JSON:
 {"intencion": "desacopio", "tipo": "pago_proveedor", "monto": 5000000, "contrato": "albañilería SDE", "es_cac": false}
 {"intencion": "desacopio", "tipo": "cobro_cliente", "monto": 3000000, "contrato": "hormigón", "es_cac": false}
 {"intencion": "consulta_contrato", "contrato": "albañilería SDE"}
-{"intencion": "listar_contratos", "tipo": "compra"}
-{"intencion": "listar_contratos", "tipo": "venta"}
+{"intencion": "listar_contratos", "tipo": "compra", "solo_pendientes": true}
+{"intencion": "listar_contratos", "tipo": "venta", "solo_pendientes": false}
 {"intencion": "otro", "respuesta": "texto de respuesta directa"}
 
-Para consultas generales de obras/gastos/acopios respondé con intencion "otro".
+Para consultas generales respondé con intencion "otro".
 Hablá en español rioplatense."""
 
 def procesar_mensaje(mensaje, remitente):
@@ -356,7 +361,7 @@ def procesar_mensaje(mensaje, remitente):
         elif intencion == "listar_contratos":
             tipo_lista = data.get("tipo", "compra")
             # Detectar si el usuario quiere solo con saldo pendiente
-            solo_pendientes = any(w in mensaje.lower() for w in ["activo","vigente","pendiente","saldo","abierto","en curso"])
+            solo_pendientes = data.get("solo_pendientes", False) or any(w in mensaje.lower() for w in ["activo","vigente","pendiente","saldo","abierto","en curso"])
             conn = get_db()
             if tipo_lista == "compra":
                 rows = conn.run("SELECT bloque, descripcion, proveedor, presupuesto, pagado FROM contratos_compra WHERE activo=TRUE ORDER BY bloque, id")
