@@ -88,20 +88,35 @@ def _excel_serial(dt):
     return (dt.date() - base).days
 
 
-def _set_cell_value(row_xml, col_letter, new_value):
-    """Reemplaza el valor de una celda específica en el XML de la fila."""
-    cell_ref = f"{col_letter}{re.search(r'r=\"(\\d+)\"', row_xml).group(1)}"
-    # Patrón para la celda con valor
-    pattern = rf'(<c r="{cell_ref}"[^>]*>)(?:<f>[^<]*</f>)?(<v>[^<]*</v>|<v/>)'
-    replacement = rf'\g<1><v>{new_value}</v>'
-    return re.sub(pattern, replacement, row_xml)
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX: Parser robusto de relaciones del xlsx
+# ─────────────────────────────────────────────────────────────────────────────
+def _parse_relationships(rels_xml):
+    """
+    Parsea el XML de _rels devolviendo dict {rId: {"target": ..., "type": ...}}.
+    Es robusto al orden de atributos dentro de cada <Relationship>.
+    """
+    rels = {}
+    # Encontrar cada tag <Relationship .../> individualmente
+    for tag in re.findall(r'<Relationship\b[^/>]*/?>', rels_xml):
+        rid_m = re.search(r'\bId="([^"]+)"', tag)
+        target_m = re.search(r'\bTarget="([^"]+)"', tag)
+        type_m = re.search(r'\bType="([^"]+)"', tag)
+        if rid_m and target_m:
+            rels[rid_m.group(1)] = {
+                "target": target_m.group(1),
+                "type": type_m.group(1) if type_m else "",
+            }
+    return rels
 
 
-def _get_cell_value(row_xml, col_letter, row_num):
-    """Obtiene el valor de una celda del XML."""
-    cell_ref = f"{col_letter}{row_num}"
-    m = re.search(rf'<c r="{cell_ref}"[^>]*>(?:<f>[^<]*</f>)?<v>([^<]*)</v>', row_xml)
-    return float(m.group(1)) if m else 0.0
+def _resolve_sheet_path(target):
+    """Normaliza un Target del rels al path real dentro del ZIP."""
+    if target.startswith('/'):
+        return target.lstrip('/')
+    if target.startswith('xl/'):
+        return target
+    return f"xl/{target}"
 
 
 def _modify_sheet_xml(sheet_xml, num_cert, fecha_serial, avances_por_fila):
@@ -113,25 +128,23 @@ def _modify_sheet_xml(sheet_xml, num_cert, fecha_serial, avances_por_fila):
     """
     lines = sheet_xml
 
-    # Reemplazar M1 (número cert)
+    # Reemplazar M1 (número cert) — manejar también <v/> vacío y celdas con t=
     lines = re.sub(
-        r'(<c r="M1"[^>]*>)(?:<f>[^<]*</f>)?<v>[^<]*</v>',
+        r'(<c r="M1"[^>]*>)(?:<f>[^<]*</f>)?(?:<v>[^<]*</v>|<v/>)',
         rf'\g<1><v>{num_cert}</v>', lines)
 
     # Reemplazar M2 (fecha)
     lines = re.sub(
-        r'(<c r="M2"[^>]*>)(?:<f>[^<]*</f>)?<v>[^<]*</v>',
+        r'(<c r="M2"[^>]*>)(?:<f>[^<]*</f>)?(?:<v>[^<]*</v>|<v/>)',
         rf'\g<1><v>{fecha_serial}</v>', lines)
 
     # Reemplazar valores H y J por cada fila
     for row_num, (nuevo_h, nuevo_j) in avances_por_fila.items():
-        # Col H
         lines = re.sub(
-            rf'(<c r="H{row_num}"[^>]*>)(?:<f>[^<]*</f>)?<v>[^<]*</v>',
+            rf'(<c r="H{row_num}"[^>]*>)(?:<f>[^<]*</f>)?(?:<v>[^<]*</v>|<v/>)',
             rf'\g<1><v>{nuevo_h}</v>', lines)
-        # Col J
         lines = re.sub(
-            rf'(<c r="J{row_num}"[^>]*>)(?:<f>[^<]*</f>)?<v>[^<]*</v>',
+            rf'(<c r="J{row_num}"[^>]*>)(?:<f>[^<]*</f>)?(?:<v>[^<]*</v>|<v/>)',
             rf'\g<1><v>{nuevo_j}</v>', lines)
 
     return lines
@@ -145,85 +158,117 @@ def _duplicar_xlsx_con_nueva_hoja(xlsx_bytes, src_sheet_name, new_sheet_name,
     """
     with zipfile.ZipFile(io.BytesIO(xlsx_bytes), 'r') as zin:
         all_files = zin.namelist()
-        
-        # Leer workbook.xml para mapear sheet name → archivo
+
+        # Leer workbook.xml y rels
         wb_xml = zin.read('xl/workbook.xml').decode('utf-8')
         rels_xml = zin.read('xl/_rels/workbook.xml.rels').decode('utf-8')
-        
-        # Encontrar el rId y archivo de la hoja fuente
-        # Encontrar todos los sheets en workbook.xml
-        sheets_in_wb = re.findall(r'<sheet name="([^"]+)"[^/]*r:id="([^"]+)"', wb_xml)
-        src_rid = None
-        for sname, rid in sheets_in_wb:
-            if sname == src_sheet_name:
-                src_rid = rid
-                break
-        
+
+        # Parsear todas las relaciones de forma robusta
+        rels = _parse_relationships(rels_xml)
+        print(f"[DEBUG] rIds disponibles en rels: {list(rels.keys())}")
+
+        # Encontrar todos los sheets en workbook.xml (manejar r:id y r:Id)
+        sheets_in_wb = re.findall(
+            r'<sheet\s+[^/]*name="([^"]+)"[^/]*r:id="([^"]+)"',
+            wb_xml
+        )
+        if not sheets_in_wb:
+            # Variante con orden de atributos invertido
+            sheets_in_wb = []
+            for tag in re.findall(r'<sheet\b[^/]*/?>', wb_xml):
+                n_m = re.search(r'\bname="([^"]+)"', tag)
+                r_m = re.search(r'\br:id="([^"]+)"', tag)
+                if n_m and r_m:
+                    sheets_in_wb.append((n_m.group(1), r_m.group(1)))
+
+        print(f"[DEBUG] Hojas en workbook: {sheets_in_wb}")
+
+        src_rid = next((rid for sname, rid in sheets_in_wb if sname == src_sheet_name), None)
         if not src_rid:
-            raise Exception(f"No encontré la hoja '{src_sheet_name}'")
-        
-        # Encontrar el archivo de la hoja fuente
-        # Buscar target — puede venir antes o después del Id
-        src_file_match = re.search(rf'Id="{src_rid}"[^>]*Target="([^"]+)"', rels_xml)
-        if not src_file_match:
-            src_file_match = re.search(rf'Target="([^"]+)"[^>]*Id="{src_rid}"', rels_xml)
-        if not src_file_match:
-            raise Exception(f"No encontré el archivo para rId={src_rid}")
-        
-        src_target = src_file_match.group(1)
-        # Normalizar path (puede ser relativo o absoluto)
-        if src_target.startswith('/'):
-            src_path = src_target[1:]
-        elif src_target.startswith('xl/'):
-            src_path = src_target
-        else:
-            src_path = f"xl/{src_target}"
-        
-        print(f"Hoja fuente: {src_path}")
-        
+            raise Exception(f"No encontré la hoja '{src_sheet_name}' en workbook.xml")
+
+        if src_rid not in rels:
+            raise Exception(
+                f"rId '{src_rid}' de la hoja '{src_sheet_name}' no existe en _rels. "
+                f"rIds disponibles: {list(rels.keys())}"
+            )
+
+        src_target = rels[src_rid]["target"]
+        src_path = _resolve_sheet_path(src_target)
+        print(f"[DEBUG] Hoja fuente: {src_path}")
+
+        if src_path not in all_files:
+            raise Exception(f"El archivo de la hoja '{src_path}' no existe en el ZIP")
+
         # Leer el XML de la hoja fuente
         src_xml = zin.read(src_path).decode('utf-8')
-        
+
         # Modificar el XML con los nuevos valores
         new_xml = _modify_sheet_xml(src_xml, num_cert, fecha_serial, avances_por_fila)
-        
-        # Determinar el próximo número de hoja
-        existing_sheet_nums = [int(re.search(r'sheet(\d+)\.xml', f).group(1))
-                               for f in all_files if re.match(r'xl/worksheets/sheet\d+\.xml', f)]
-        next_num = max(existing_sheet_nums) + 1
+
+        # Determinar el próximo número de hoja (sheet{N}.xml) sin colisión
+        existing_sheet_nums = [
+            int(re.search(r'sheet(\d+)\.xml', f).group(1))
+            for f in all_files if re.match(r'xl/worksheets/sheet\d+\.xml', f)
+        ]
+        next_num = (max(existing_sheet_nums) if existing_sheet_nums else 0) + 1
         new_file = f"xl/worksheets/sheet{next_num}.xml"
-        new_rid = f"rId{next_num + 10}"  # rId único
-        
+
+        # rId único: tomar el max numérico actual + 1
+        existing_rid_nums = []
+        for rid in rels.keys():
+            m = re.match(r'rId(\d+)', rid)
+            if m:
+                existing_rid_nums.append(int(m.group(1)))
+        next_rid_num = (max(existing_rid_nums) if existing_rid_nums else 0) + 1
+        new_rid = f"rId{next_rid_num}"
+
+        # Determinar próximo sheetId (atributo de <sheet>) sin colisión
+        existing_sheet_ids = [int(m) for m in re.findall(r'<sheet\b[^/]*sheetId="(\d+)"', wb_xml)]
+        next_sheet_id = (max(existing_sheet_ids) if existing_sheet_ids else 0) + 1
+
+        print(f"[DEBUG] Nuevo sheet: file={new_file}, rId={new_rid}, sheetId={next_sheet_id}")
+
         # Construir nuevo ZIP
         out = io.BytesIO()
         with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zout:
             for item in all_files:
                 data = zin.read(item)
-                
+
                 if item == 'xl/workbook.xml':
-                    # Agregar la nueva hoja antes de </sheets>
                     decoded = data.decode('utf-8')
-                    new_sheet_entry = f'<sheet name="{new_sheet_name}" sheetId="{next_num}" r:id="{new_rid}"/>'
+                    new_sheet_entry = (
+                        f'<sheet name="{new_sheet_name}" '
+                        f'sheetId="{next_sheet_id}" r:id="{new_rid}"/>'
+                    )
                     decoded = decoded.replace('</sheets>', f'{new_sheet_entry}</sheets>')
                     data = decoded.encode('utf-8')
-                
+
                 elif item == 'xl/_rels/workbook.xml.rels':
                     decoded = data.decode('utf-8')
-                    new_rel = f'<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet{next_num}.xml" Id="{new_rid}"/>'
+                    new_rel = (
+                        f'<Relationship '
+                        f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+                        f'Target="worksheets/sheet{next_num}.xml" '
+                        f'Id="{new_rid}"/>'
+                    )
                     decoded = decoded.replace('</Relationships>', f'{new_rel}</Relationships>')
                     data = decoded.encode('utf-8')
-                
+
                 elif item == '[Content_Types].xml':
                     decoded = data.decode('utf-8')
-                    new_ct = f'<Override PartName="/xl/worksheets/sheet{next_num}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    new_ct = (
+                        f'<Override PartName="/xl/worksheets/sheet{next_num}.xml" '
+                        f'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    )
                     decoded = decoded.replace('</Types>', f'{new_ct}</Types>')
                     data = decoded.encode('utf-8')
-                
+
                 zout.writestr(item, data)
-            
+
             # Agregar la nueva hoja
             zout.writestr(new_file, new_xml.encode('utf-8'))
-        
+
         return out.getvalue()
 
 
@@ -262,7 +307,6 @@ def _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert):
         styles = getSampleStyleSheet()
         story = []
 
-        # Header
         h1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=16, alignment=TA_CENTER, spaceAfter=4)
         h2 = ParagraphStyle('h2', parent=styles['Normal'], fontSize=11, alignment=TA_CENTER, spaceAfter=12)
         story.append(Paragraph(f"CERTIFICADO N°{num_cert}", h1))
@@ -270,7 +314,6 @@ def _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert):
         story.append(Paragraph(f"Fecha: {fecha_dt.strftime('%d/%m/%Y')}", h2))
         story.append(Spacer(1, 0.5*cm))
 
-        # Tabla de avances
         data = [["PISO / TAREA", "% ACTUAL"]]
         for linea in lineas_avance:
             linea = linea.strip().lstrip('•').strip()
@@ -294,12 +337,10 @@ def _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert):
         story.append(t)
         story.append(Spacer(1, 0.5*cm))
 
-        # Monto
         total_s = ParagraphStyle('total', parent=styles['Normal'], fontSize=12, spaceAfter=4)
         story.append(Paragraph(f"<b>Monto certificado estimado:</b>  ${monto_cert:,.0f}", total_s))
         story.append(Spacer(1, 2*cm))
 
-        # Firmas
         firma_data = [["_________________________", "_________________________"],
                       ["Dirección de Obra", "Contratista — Julio Cabrera"]]
         ft = Table(firma_data, colWidths=[8*cm, 8*cm])
@@ -374,39 +415,41 @@ def certificar_durlock(mensaje, num_whatsapp=None):
             num_cert = 1
 
         new_sheet_name = f"CERT N°{num_cert}"
-        print(f"Generando {new_sheet_name} basado en {last_cert_name}")
+        print(f"[DEBUG] Generando {new_sheet_name} basado en {last_cert_name}")
 
-        # 4. Leer acumulados del cert anterior para calcular nuevos
-        # Necesitamos leer los J values del último cert para saber el anterior
+        # 4. Leer acumulados del cert anterior usando el parser robusto
         prev_j_values = {}
         if last_cert_name:
             with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as zf:
-                # Encontrar el archivo del último cert
-                sheets_in_wb = re.findall(r'<sheet name="([^"]+)"[^/]*r:id="([^"]+)"', wb_xml)
+                rels = _parse_relationships(rels_xml)
+
+                # Buscar rId de la hoja del último cert
+                sheets_in_wb = []
+                for tag in re.findall(r'<sheet\b[^/]*/?>', wb_xml):
+                    n_m = re.search(r'\bname="([^"]+)"', tag)
+                    r_m = re.search(r'\br:id="([^"]+)"', tag)
+                    if n_m and r_m:
+                        sheets_in_wb.append((n_m.group(1), r_m.group(1)))
+
                 src_rid = next((rid for name, rid in sheets_in_wb if name == last_cert_name), None)
-                if src_rid:
-                    # Buscar target del rId en rels (puede tener / al inicio)
-                    src_match = re.search(rf'Id="{src_rid}"[^>]*Target="([^"]+)"', rels_xml)
-                    if not src_match:
-                        src_match = re.search(rf'Target="([^"]+)"[^>]*Id="{src_rid}"', rels_xml)
-                    if src_match:
-                        src_target = src_match.group(1)
-                        if src_target.startswith('/'):
-                            src_path = src_target[1:]
-                        elif src_target.startswith('xl/'):
-                            src_path = src_target
-                        else:
-                            src_path = f"xl/{src_target}"
+
+                if src_rid and src_rid in rels:
+                    src_path = _resolve_sheet_path(rels[src_rid]["target"])
+                    if src_path in zf.namelist():
                         prev_xml = zf.read(src_path).decode('utf-8')
 
-                        # Leer todos los J values
                         for piso, tareas_map in DURLOCK_ROWS.items():
                             for tarea, row_num in tareas_map.items():
                                 j_match = re.search(
                                     rf'<c r="J{row_num}"[^>]*>(?:<f>[^<]*</f>)?<v>([^<]*)</v>',
                                     prev_xml)
                                 if j_match:
-                                    prev_j_values[row_num] = float(j_match.group(1))
+                                    try:
+                                        prev_j_values[row_num] = float(j_match.group(1))
+                                    except ValueError:
+                                        prev_j_values[row_num] = 0.0
+                else:
+                    print(f"[WARN] No pude leer acumulados del cert anterior (rId={src_rid})")
 
         # 5. Construir mapa de cambios: {row_num: (nuevo_H, nuevo_J)}
         avances_por_fila = {}
@@ -431,7 +474,7 @@ def certificar_durlock(mensaje, num_whatsapp=None):
                 tarea_corta = tarea_key.replace("según plano", "").replace("e iluminacion", "").strip()
                 lineas_avance.append(f"  • {piso} — {tarea_corta}: {pct_act}%")
 
-        # Para pisos NO mencionados: H = J = acumulado anterior (sin avance nuevo)
+        # Pisos NO mencionados: H = J = acumulado anterior
         for piso, tareas_map in DURLOCK_ROWS.items():
             for tarea, row_num in tareas_map.items():
                 if row_num not in avances_por_fila:
