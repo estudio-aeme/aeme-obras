@@ -1,7 +1,7 @@
 """
 cert_module.py — Módulo de certificación ObraManager
 Estrategia: usa openpyxl para manipular el .xlsx de forma robusta.
-Preserva formato, fórmulas y estilos al duplicar la hoja del cert anterior.
+Versión simplificada: solo actualiza Excel y devuelve el link (sin PDF).
 """
 import os, io, json, re, requests
 from datetime import datetime, date
@@ -73,17 +73,6 @@ def _update_drive(file_id, data, mime):
         headers={"Authorization": f"Bearer {_token()}", "Content-Type": mime}, data=data)
     r.raise_for_status()
     return r.json()
-
-
-def _upload_new(folder_id, name, data, mime):
-    token = _token()
-    r = requests.post(
-        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
-        headers={"Authorization": f"Bearer {token}"},
-        files={"metadata": (None, json.dumps({"name": name, "parents": [folder_id]}), "application/json"),
-               "file": (name, data, mime)})
-    r.raise_for_status()
-    return r.json().get("id")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,92 +153,6 @@ Tareas: "Armado de estructura según plano", "Emplacado general", "Masillado e i
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Generador de PDF
-# ─────────────────────────────────────────────────────────────────────────────
-def _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert):
-    """Genera PDF con reportlab o fpdf2."""
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib import colors
-        from reportlab.lib.units import cm
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.enums import TA_CENTER
-
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm,
-                                leftMargin=2*cm, rightMargin=2*cm)
-        styles = getSampleStyleSheet()
-        story = []
-
-        h1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=16, alignment=TA_CENTER, spaceAfter=4)
-        h2 = ParagraphStyle('h2', parent=styles['Normal'], fontSize=11, alignment=TA_CENTER, spaceAfter=12)
-        story.append(Paragraph(f"CERTIFICADO N°{num_cert}", h1))
-        story.append(Paragraph(f"Durlock MO — Constitución, Santiago del Estero", h2))
-        story.append(Paragraph(f"Fecha: {fecha_dt.strftime('%d/%m/%Y')}", h2))
-        story.append(Spacer(1, 0.5*cm))
-
-        data = [["PISO / TAREA", "% ACTUAL"]]
-        for linea in lineas_avance:
-            linea = linea.strip().lstrip('•').strip()
-            parts = linea.rsplit(":", 1)
-            if len(parts) == 2:
-                data.append([parts[0].strip(), parts[1].strip()])
-
-        t = Table(data, colWidths=[13*cm, 3*cm])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F2D3D')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('ALIGN', (1, 0), (1, -1), 'CENTER'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F7F7F7')]),
-            ('TOPPADDING', (0, 0), (-1, -1), 5),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ('LEFTPADDING', (0, 0), (0, -1), 8),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 0.5*cm))
-
-        total_s = ParagraphStyle('total', parent=styles['Normal'], fontSize=12, spaceAfter=4)
-        story.append(Paragraph(f"<b>Monto certificado estimado:</b>  ${monto_cert:,.0f}", total_s))
-        story.append(Spacer(1, 2*cm))
-
-        firma_data = [["_________________________", "_________________________"],
-                      ["Dirección de Obra", "Contratista — Julio Cabrera"]]
-        ft = Table(firma_data, colWidths=[8*cm, 8*cm])
-        ft.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                ('FONTSIZE', (0, 0), (-1, -1), 10),
-                                ('TOPPADDING', (0, 0), (-1, -1), 4)]))
-        story.append(ft)
-
-        doc.build(story)
-        return buf.getvalue()
-
-    except Exception as e:
-        print(f"PDF error: {e}")
-        try:
-            from fpdf import FPDF
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_font("Helvetica", "B", 16)
-            pdf.cell(0, 10, f"CERTIFICADO N{chr(176)}{num_cert} - DURLOCK MO", ln=True, align="C")
-            pdf.set_font("Helvetica", "", 11)
-            pdf.cell(0, 8, f"Santiago del Estero  |  {fecha_dt.strftime('%d/%m/%Y')}", ln=True, align="C")
-            pdf.ln(5)
-            for linea in lineas_avance:
-                pdf.cell(0, 7, linea.encode('latin-1', 'replace').decode('latin-1'), ln=True)
-            pdf.ln(5)
-            pdf.set_font("Helvetica", "B", 12)
-            pdf.cell(0, 8, f"Monto certificado: ${monto_cert:,.0f}", ln=True)
-            return bytes(pdf.output())
-        except Exception as e2:
-            print(f"PDF fpdf2 error: {e2}")
-            return None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Función principal
 # ─────────────────────────────────────────────────────────────────────────────
 def certificar_durlock(mensaje, num_whatsapp=None):
@@ -310,7 +213,6 @@ def certificar_durlock(mensaje, num_whatsapp=None):
         # 6. Construir mapa de cambios: {row_num: (nuevo_H, nuevo_J)}
         avances_por_fila = {}
         lineas_avance = []
-        monto_cert_est = 0
 
         for piso, tareas in avances.items():
             if piso not in DURLOCK_ROWS:
@@ -362,25 +264,15 @@ def certificar_durlock(mensaje, num_whatsapp=None):
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         print(f"[DEBUG] xlsx subido a Drive OK")
 
-        # 11. Generar y subir PDF
-        pdf_str = ""
-        try:
-            pdf_bytes = _generar_pdf(num_cert, fecha_dt, lineas_avance, monto_cert_est)
-            if pdf_bytes:
-                pdf_nombre = f"Cs_SDE_DURLOCK_CERT_N{num_cert}_{fecha_dt.strftime('%Y%m%d')}.pdf"
-                fid = _upload_new(DRIVE["durlock"]["folder"], pdf_nombre, pdf_bytes, "application/pdf")
-                if fid:
-                    pdf_str = f"\n📎 PDF: https://drive.google.com/file/d/{fid}/view"
-        except Exception as pe:
-            print(f"PDF skip: {pe}")
+        # 11. Construir link al Excel
+        excel_link = f"https://docs.google.com/spreadsheets/d/{DRIVE['durlock']['xlsx']}/edit"
 
         # 12. Respuesta
         respuesta = (
             f"✅ *{new_sheet_name} — Durlock interno*\n"
             f"📅 {fecha_dt.strftime('%d/%m/%Y')}\n\n"
             f"*Avances:*\n" + "\n".join(lineas_avance) + "\n\n"
-            f"📊 Excel actualizado en Drive"
-            + pdf_str
+            f"📊 Excel actualizado:\n{excel_link}"
         )
         return respuesta, True
 
