@@ -349,12 +349,13 @@ def procesar_con_ia(mensaje):
     headers = {"Content-Type": "application/json",
                "x-api-key": ANTHROPIC_API_KEY,
                "anthropic-version": "2023-06-01"}
-    body = {"model": "claude-sonnet-4-20250514", "max_tokens": 400,
+    body = {"model": "claude-haiku-4-5-20251001", "max_tokens": 400,
             "system": SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": mensaje}]}
     r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
     if r.status_code != 200:
-        return {"intencion": "otro", "respuesta": "Error al procesar el mensaje."}
+        print(f"API error {r.status_code}: {r.text}")
+        return {"intencion": "otro", "respuesta": f"Error API ({r.status_code}). Avisá a Julián."}
     text = r.json()["content"][0]["text"].strip()
     text = re.sub(r"^```json|^```|```$", "", text, flags=re.MULTILINE).strip()
     try:
