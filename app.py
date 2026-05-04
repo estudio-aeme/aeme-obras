@@ -386,6 +386,14 @@ def procesar_mensaje(remitente, mensaje):
             msg = registrar_desacopio(op["proveedor"], op["monto"], op.get("rubro",""), op.get("nota",""), op.get("factura",""))
         elif op["tipo"] == "certificado":
             msg = registrar_certificado(op["fecha"], op["descripcion"], op["monto"], op["tipo_cert"], op.get("contrato",""), op.get("incluye_cac",False), op.get("monto_cac",0))
+        elif op["tipo"] == "certificar_durlock":
+            if CERT_MODULE_OK:
+                try:
+                    msg, ok = certificar_durlock(op["mensaje_original"])
+                except Exception as e:
+                    msg = f"❌ Error: {str(e)}"
+            else:
+                msg = "❌ Módulo no disponible."
         else:
             msg = "✅ Registrado."
         return msg
