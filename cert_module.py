@@ -350,11 +350,16 @@ def certificar_durlock(mensaje, num_whatsapp=None):
         drive_update(DRIVE_FILES["durlock"]["xlsx"], xlsx_nuevo,
                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # 5. Generar PDF y subirlo
-        pdf_nombre = f"Cs_SDE_DURLOCK_CERTN°{num_cert}.pdf"
-        pdf_bytes = _xlsx_a_pdf(xlsx_nuevo, f"CERT N°{num_cert}")
-        if pdf_bytes:
-            drive_upload_new(DRIVE_FILES["durlock"]["folder"], pdf_nombre, pdf_bytes, "application/pdf")
+        # 5. Generar PDF y subirlo (opcional - requiere LibreOffice)
+        pdf_str = ""
+        try:
+            pdf_nombre = f"Cs_SDE_DURLOCK_CERTN°{num_cert}.pdf"
+            pdf_bytes = _xlsx_a_pdf(xlsx_nuevo, f"CERT N°{num_cert}")
+            if pdf_bytes:
+                drive_upload_new(DRIVE_FILES["durlock"]["folder"], pdf_nombre, pdf_bytes, "application/pdf")
+                pdf_str = " + PDF"
+        except Exception as pdf_err:
+            print(f"PDF skip: {pdf_err}")
 
         # 6. Resumen de avances
         lineas_avance = []
@@ -370,7 +375,7 @@ def certificar_durlock(mensaje, num_whatsapp=None):
             f"*Avances certificados:*\n" + "\n".join(lineas_avance) + "\n\n"
             f"💵 Monto cert: *${monto_cert/1e6:.3f}M*\n"
             f"📊 Acumulado: ${monto_acum/1e6:.3f}M ({pct_avance*100:.1f}% del contrato)\n"
-            f"📁 Excel y PDF actualizados en Drive"
+            f"📁 Excel{pdf_str} actualizado en Drive"
         )
         return respuesta, True
 
