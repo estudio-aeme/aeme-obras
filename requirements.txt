@@ -1,5 +1,5 @@
-flask==3.0.0
-twilio==8.13.0
-gunicorn==21.2.0
-requests==2.31.0
-pg8000==1.31.1
+flask
+twilio
+psycopg2-binary
+requests
+gunicorn
